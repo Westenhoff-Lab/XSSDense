@@ -173,6 +173,7 @@ example/reference_results/
 ## Step 1: Generate TFRecords
 
 Convert voxelized density maps into TensorFlow TFRecords.
+
 Expected runtime: ~5 min.
 
 ```bash
@@ -206,6 +207,7 @@ python Train_VAE.py \
 ```
 
 The output directory created contains the final encoder and decoder model as well as the weights of them over the different epochs and a log file that contains the losses over the epochs. 
+
 Expected runtime: ~2 hrs .
 
 Output:
@@ -242,6 +244,7 @@ lov2_model/
 ├── latent_pca.png
 └── latent_stats.txt
 ```
+
 Expected runtime: 5 min.
 ---
 
@@ -273,6 +276,7 @@ lov2_reconstruction/
 ├── final_rank0_score.npy
 └── log.txt
 ```
+
 Expected runtime: 50 min.
 
 # Using Your Own Data

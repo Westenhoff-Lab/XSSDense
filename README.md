@@ -140,10 +140,10 @@ Install dependencies:
 pip install tensorflow numpy scipy matplotlib scikit-learn cupy-cuda13x gemmi tqdm
 ```
 
-Depending on you CUDA and GPU other version than those listed above might be required. 
+Depending on your CUDA version and GPU architecture, versions other than those listed above may be required. 
 
 ### Installation Time
-Installation typically requires 10-20 minutes on depending on TensorFlow and CUDA configuration.
+Installation typically requires 10–20 minutes, depending on the TensorFlow and CUDA configuration.
  
 
 ---

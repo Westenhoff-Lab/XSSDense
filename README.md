@@ -404,5 +404,3 @@ https://github.com/Westenhoff-Lab/XSSDense
 The example dataset used to validate installation and reproduce the workflow is available at:
 
 https://doi.org/10.5281/zenodo.21915224
-
-The software is distributed under the GNU General Public License v3.0 (GPL-3.0).

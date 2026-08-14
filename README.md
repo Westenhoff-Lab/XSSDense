@@ -98,8 +98,35 @@ Fitness Score
 Evolution
 ```
 
-# Installation
+# System Requirements
+All code has been tested on a system using the following setup: 
 
+### Operating System
+- Rocky Linux 8.10
+
+### CUDA version
+- 13.2
+
+### Python
+- Python 3.11.3
+
+### Main Dependencies
+- TensorFlow 2.20
+- NumPy 1.26.4
+- SciPy 1.17
+- Matplotlib 3.10
+- scikit-learn 1.6.1
+- CuPy-cuda13x 13.6.0
+- Gemmi 0.7.4
+- tqdm 4.67.1
+
+
+### Hardware
+
+- GPU: NVIDIA Tesla A100 HGX GPU 40GB VRAM
+- CPU: 2 x 32 core Intel(R) Xeon(R) Gold 6338
+
+# Installation
 Clone the repository:
 
 ```bash
@@ -113,13 +140,17 @@ Install dependencies:
 pip install tensorflow numpy scipy matplotlib scikit-learn cupy gemmi tqdm
 ```
 
-Depending on your CUDA and TensorFlow configuration, additional packages may be required.
+Depending on you CUDA and GPU other version than those listed above might be required. 
+
+### Installation Time
+Installation typically requires 10-20 minutes on depending on TensorFlow and CUDA configuration.
+ 
 
 ---
 
 # Quick Start Tutorial
 
-The example dataset found in: https://doi.org/10.5281/zenodo.21915224 reproduces the complete XSSDense pipeline and serves as an installation and workflow validation test.
+The example dataset found in: https://doi.org/10.5281/zenodo.21915224 reproduces the complete XSSDense pipeline and serves as an workflow validation test.
 
 ## Example Dataset
 
@@ -142,6 +173,7 @@ example/reference_results/
 ## Step 1: Generate TFRecords
 
 Convert voxelized density maps into TensorFlow TFRecords.
+Expected runtime: ~5 min.
 
 ```bash
 python generate_tfrecord.py \
@@ -174,6 +206,7 @@ python Train_VAE.py \
 ```
 
 The output directory created contains the final encoder and decoder model as well as the weights of them over the different epochs and a log file that contains the losses over the epochs. 
+Expected runtime: ~2 hrs .
 
 Output:
 
@@ -209,7 +242,7 @@ lov2_model/
 ├── latent_pca.png
 └── latent_stats.txt
 ```
-
+Expected runtime: 5 min.
 ---
 
 ## Step 4: Reconstruct Electron Density
@@ -240,7 +273,7 @@ lov2_reconstruction/
 ├── final_rank0_score.npy
 └── log.txt
 ```
-
+Expected runtime: 50 min.
 
 # Using Your Own Data
 
@@ -340,14 +373,15 @@ A genetic algorithm searches latent space for density maps that best reproduce t
 }
 ```
 
----
 
-## Expected Outcome
+# Code Availability
 
-After completing the workflow, users will obtain:
+The XSSDense source code is freely available at:
 
-- A trained β-VAE model
-- Latent-space statistics
-- Optimized latent-space solutions
-- Three-dimensional reconstructed electron-density maps
-- Scattering profiles consistent with experimental XSS observations
+https://github.com/Westenhoff-Lab/XSSDense
+
+The example dataset used to validate installation and reproduce the workflow is available at:
+
+https://doi.org/10.5281/zenodo.21915224
+
+The software is distributed under the GNU General Public License v3.0 (GPL-3.0).

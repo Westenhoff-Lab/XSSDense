@@ -281,7 +281,19 @@ Expected runtime: 50 min.
 
 # Using Your Own Data
 
-## 1. Voxelise Structures
+## Instructions for Use
+
+To analyze a new system, users should:
+
+1. Generate voxelized density maps from structural models.
+2. Convert the voxel maps to TFRecords.
+3. Train a β-VAE model.
+4. Compute latent-space statistics.
+5. Supply experimental scattering data.
+6. Run latent-space reconstruction.
+7. Analyze the resulting CCP4 density maps.
+
+## 1. Voxelize Structures
 
 Input:
 

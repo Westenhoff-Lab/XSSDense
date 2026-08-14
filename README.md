@@ -388,6 +388,11 @@ A genetic algorithm searches latent space for density maps that best reproduce t
   doi = {10.64898/2026.08.07.743437}
 }
 ```
+# License
+
+XSSDense is distributed under the GNU General Public License v3.0 (GPL-3.0).
+
+See the LICENSE file for the full license text.
 
 
 # Code Availability

@@ -137,7 +137,7 @@ cd XSSDense
 Install dependencies:
 
 ```bash
-pip install tensorflow numpy scipy matplotlib scikit-learn cupy gemmi tqdm
+pip install tensorflow numpy scipy matplotlib scikit-learn cupy-cuda13x gemmi tqdm
 ```
 
 Depending on you CUDA and GPU other version than those listed above might be required. 
@@ -150,7 +150,7 @@ Installation typically requires 10-20 minutes on depending on TensorFlow and CUD
 
 # Quick Start Tutorial
 
-The example dataset found in: https://doi.org/10.5281/zenodo.21915224 reproduces the complete XSSDense pipeline and serves as an workflow validation test.
+The example dataset available at https://doi.org/10.5281/zenodo.21915224 reproduces the LOV2 unfolding case presented in the accompanying manuscript. By following the workflow described below, users can reproduce the complete XSSDense pipeline, validate the software installation, and verify the expected outputs.
 
 ## Example Dataset
 

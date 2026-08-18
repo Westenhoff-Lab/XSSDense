@@ -81,7 +81,7 @@ class VAE(tf.keras.Model):
         return mean, logvar
 
     def reparameterize(self, mean, logvar):
-        eps = tf.random.normal(shape=mean.shape)
+        eps = tf.random.normal(shape=tf.shape(mean))
         return eps * tf.exp(0.5 * logvar) + mean
 
     def decode(self, z):
@@ -274,7 +274,7 @@ with open(log_path, 'a') as log_file:
 
 print("\nFinal test evaluation...")
 
-test_loss, test_mse, test_kls = 0.0, 0.0, 0.0
+test_loss, test_mse, test_kl = 0.0, 0.0, 0.0
 test_steps = 20
 
 for x_test, _ in test_ds.take(test_steps):

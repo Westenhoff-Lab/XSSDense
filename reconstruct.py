@@ -18,9 +18,6 @@ from cupyx.scipy.ndimage import distance_transform_edt
 from cupyx.scipy import fft as cpx_fft
 import matplotlib.pyplot as plt
 
-from process_training import unnormalize_minmax
-
-
 def unnormalize_minmax(x_norm, xmin, xmax):
     return (x_norm * (xmax - xmin) + xmin).astype(np.float32)
 

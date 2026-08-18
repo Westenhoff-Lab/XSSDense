@@ -200,8 +200,8 @@ example_output/
 
 ```bash
 python Train_VAE.py \
-    example_output/tfrecords/train.tfrecord \
-    example_output/tfrecords/test.tfrecord \
+    example_output/tfrecords/train.tfrecords \
+    example_output/tfrecords/test.tfrecords \
     lov2_model \
     late \
     1

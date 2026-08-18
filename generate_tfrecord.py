@@ -71,7 +71,7 @@ def run_workflow(voxels_dir, output_dir):
     # Load voxel files
     # ------------------------------------------------
     with h5py.File(voxels_dir, "r") as voxels_file:
-        print(f"Loaded {len(voxels_file)} samples")
+        print(f"Loaded {voxels_file['rho'].shape[0]} samples")
         voxels = voxels_file['rho'][()]
         # ------------------------------------------------
         # Global min–max normalization to [0, 1]

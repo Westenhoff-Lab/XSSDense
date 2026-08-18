@@ -4,7 +4,7 @@
 Voxel-only TFRecord pipeline with global min–max normalization [0, 1]
 
 Input:
-- Directory of .npy files, each with shape (32, 32, 32)
+- Directory of .npy files, each with shape (52, 52, 52)
 
 Output:
 - TFRecords (train/test)

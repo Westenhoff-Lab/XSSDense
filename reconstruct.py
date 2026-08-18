@@ -932,7 +932,7 @@ if __name__ == "__main__":
 
     #np.save(f"{output_folder}/score_history.npy", np.array(history))
 
-    np.save(f"{output_folder}/fitted_abolute_alpha_scale.npy", ga.absolute_scale)
+    np.save(f"{output_folder}/fitted_absolute_alpha_scale.npy", ga.absolute_scale)
     np.save(f"{output_folder}/fitted_absolute_drho.npy", ga.dark_drho)
     np.save(f"{output_folder}/fitted_absolute_shell.npy", ga.dark_shell)
     logfile.close()

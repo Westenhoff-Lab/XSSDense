@@ -119,6 +119,7 @@ All code has been tested on a system using the following setup:
 - CuPy-cuda13x 13.6.0
 - Gemmi 0.7.4
 - tqdm 4.67.1
+- keras 3.13.1
 
 
 ### Hardware
@@ -137,10 +138,10 @@ cd XSSDense
 Install dependencies:
 
 ```bash
-pip install tensorflow numpy scipy matplotlib scikit-learn cupy-cuda13x gemmi tqdm
+pip install numpy scipy matplotlib scikit-learn gemmi tqdm
 ```
 
-Depending on your CUDA version and GPU architecture, versions other than those listed above may be required. 
+Install cupy-cuda and tensorflow compatible with your CUDA version and GPU architecture, versions other than those listed above may be required. 
 
 ### Installation Time
 Installation typically requires 10–20 minutes, depending on the TensorFlow and CUDA configuration.
@@ -150,7 +151,7 @@ Installation typically requires 10–20 minutes, depending on the TensorFlow and
 
 # Quick Start Tutorial
 
-The example dataset available at https://doi.org/10.5281/zenodo.21915224 reproduces the LOV2 unfolding case presented in the accompanying manuscript. By following the workflow described below, users can reproduce the complete XSSDense pipeline, validate the software installation, and verify the expected outputs.
+The example dataset available at https://doi.org/10.5281/zenodo.21915224 reproduces the LOV2 unfolding case presented in the accompanying manuscript. By following the workflow described below, users can reproduce the complete XSSDense pipeline, validate the software installation, and verify the expected outputs. The model saved in the example folder were saved with Keras 3.13.1 
 
 ## Example Dataset
 
@@ -187,8 +188,8 @@ Output:
 ```text
 example_output/
 ├── tfrecords/
-│   ├── train.tfrecord
-│   └── test.tfrecord
+│   ├── train.tfrecords
+│   └── test.tfrecords
 └── meta/
     └── meta.json
 ```
@@ -213,7 +214,7 @@ Expected runtime: ~2 hrs .
 Output:
 
 ```text
-lov2_model/
+lov2_model_log/
 ├── encoder_model.keras
 ├── decoder_model.keras
 ├── vae_epoch_*.weights.h5
@@ -235,7 +236,7 @@ python process_training.py \
 Output:
 
 ```text
-lov2_model/
+lov2_model_log/
 ├── encoder_model.keras
 ├── decoder_model.keras
 ├── vae_epoch_*.weights.h5

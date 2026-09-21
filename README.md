@@ -253,9 +253,9 @@ lov2_model_log/
 
 ```bash
 python process_training.py \
-    lov2_model/ \
-    example_output/tfrecords/train.tfrecord \
-    lov2_model/
+    lov2_model_log/ \
+    example_output/tfrecords/train.tfrecords \
+    lov2_model_log/
 ``` 
 
 Output:

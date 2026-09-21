@@ -132,7 +132,7 @@ All code has been tested on a system using the following setup:
 Clone the repository:
 
 ```bash
-git clone https://github.com/your-username/XSSDense.git
+git clone https://github.com/Westenhoff-Lab/XSSDense.git
 cd XSSDense
 ```
 

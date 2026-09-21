@@ -27,7 +27,7 @@ def compute_rho(rs, element_parms, beta=0.0):
 
 
 def load_sucoppens():
-    with open("/home/monrroy/main/waxs-ml/data/SuCoppens.dat", "r") as f:
+    with open("SuCoppens.dat", "r") as f:
         content = [l for l in f.readlines() if l.strip() and not l.startswith("#")]
     asflib = {}
     for chunk in [content[i : i + 3] for i in numpy.arange(0, len(content), 3)]:

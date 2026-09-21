@@ -3,6 +3,7 @@ import MDAnalysis
 import glob, re, os
 import h5py
 import argparse
+from pathlib import Path
 
 def natsort(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", s)]
@@ -27,14 +28,16 @@ def compute_rho(rs, element_parms, beta=0.0):
 
 
 def load_sucoppens():
-    with open("SuCoppens.dat", "r") as f:
+    data_file = Path(__file__).parent / "SuCoppens.dat"
+    with open(data_file, "r") as f:
         content = [l for l in f.readlines() if l.strip() and not l.startswith("#")]
     asflib = {}
-    for chunk in [content[i : i + 3] for i in numpy.arange(0, len(content), 3)]:
+    for chunk in [content[i:i+3] for i in range(0, len(content), 3)]:
         element = chunk[0].split()[1]
         a = [float(e) for e in chunk[1].split()]
         b = [float(e) for e in chunk[2].split()]
         asflib[element] = {"a": a, "b": b}
+
     return asflib
 
 

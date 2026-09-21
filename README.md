@@ -120,6 +120,7 @@ All code has been tested on a system using the following setup:
 - Gemmi 0.7.4
 - tqdm 4.67.1
 - keras 3.13.1
+- MDAnalysis 2.10
 
 
 ### Hardware
@@ -138,7 +139,7 @@ cd XSSDense
 Install dependencies:
 
 ```bash
-pip install numpy scipy matplotlib scikit-learn gemmi tqdm
+pip install numpy scipy matplotlib scikit-learn gemmi tqdm MDAnalysis==2.10
 ```
 
 Install cupy-cuda and tensorflow compatible with your CUDA version and GPU architecture, versions other than those listed above may be required. 
@@ -157,7 +158,7 @@ The example dataset available at https://doi.org/10.5281/zenodo.21915224 reprodu
 
 ```text
 example/
-├── voxel_maps.h5
+├── aligned_pdbs
 ├── ground_state.dat
 ├── difference_signal.dat
 └── reference_results/
@@ -170,8 +171,32 @@ example/reference_results/
 ```
 
 ---
+## Step 1: Convert PDBs into electron density
+Convert PDBs into voxelized density maps.
 
-## Step 1: Generate TFRecords
+Expected runtime: ~5 min.
+
+```bash
+python voxelise_pdb.py
+--bbmax 61
+--dv 2.4
+--pdb_path aligned_pdbs
+--reference_pdb aligned_pdbs/Ref_pred_aligned.sup.pdb
+--save_path example_output/voxel_maps
+--system LOV2
+
+```
+Output:
+
+```text
+example_output/
+├── voxel_maps
+    └── LOV2_61.0bb_2d4dv_5.0co.h5
+```
+
+---
+
+## Step 2: Generate TFRecords
 
 Convert voxelized density maps into TensorFlow TFRecords.
 
@@ -179,7 +204,7 @@ Expected runtime: ~5 min.
 
 ```bash
 python generate_tfrecord.py \
-    example/voxel_maps.h5 \
+    example_output/voxel_maps/LOV2_61.0bb_2d4dv_5.0co.h5 \
     example_output/
 ```
 
@@ -196,7 +221,7 @@ example_output/
 
 ---
 
-## Step 2: Train the β-VAE
+## Step 3: Train the β-VAE
 
 ```bash
 python Train_VAE.py \
@@ -224,7 +249,7 @@ lov2_model_log/
 
 ---
 
-## Step 3: Generate Latent-Space Statistics
+## Step 4: Generate Latent-Space Statistics
 
 ```bash
 python process_training.py \
@@ -249,7 +274,7 @@ lov2_model_log/
 Expected runtime: 5 min.
 ---
 
-## Step 4: Reconstruct Electron Density
+## Step 5: Reconstruct Electron Density
 
 ```bash
 python reconstruct.py \
@@ -296,10 +321,48 @@ To analyze a new system, users should:
 
 ## 1. Voxelize Structures
 
+If one has an ensemble of aligned PDB structures from e.g. AlphaFold the following command should be run: 
+
+```bash
+python voxelise_pdb.py
+--bbmax 61
+--dv 2.4
+--pdb_path aligned_pdbs
+--reference_pdb aligned_pdbs/Ref_pred_aligned.sup.pdb
+--save_path example_output/voxel_maps
+--system LOV2
+```
+
+If instead a topology and trajectory from a Molecular Dynamics simulation is to be used the following command should be used: 
+```bash
+python voxelise_pdb.py
+--bbmax 61
+--dv 2.4
+--trajectory trajectory.dcd
+--topology topology.psf
+--save_path example_output/voxel_maps
+--system LOV2
+```
+
+
+
+### Important Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| bbmax |Maximum dimension of the cubic bounding box (Å). All structures are voxelized within this box. |
+| dv | Voxel size (Å). Smaller values yield higher-resolution voxel grids but increase memory usage and storage requirements |
+| pdb_path | Directory containing the aligned PDB structures to be voxelized |
+| reference_pdb | Reference structure used to define the common coordinate frame and voxel grid. All input structures should be aligned to this reference.|
+| save_path | Output directory where voxelized structures and associated metadata will be stored. |
+| system | Name of the system being processed (e.g., `LOV2`). Used for naming output files and metadata.|
+| topology | Topology file from MD simulation. |
+| trajectory | MD trajectory of the molecule of interest. |
+
 Input:
 
 ```text
-pdb_structures/
+aligned_pdbs/
 ├── structure1.pdb
 ├── structure2.pdb
 └── ...

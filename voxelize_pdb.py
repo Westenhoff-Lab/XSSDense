@@ -5,6 +5,7 @@ import h5py
 import argparse
 from pathlib import Path
 
+
 def natsort(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", s)]
 
@@ -32,12 +33,11 @@ def load_sucoppens():
     with open(data_file, "r") as f:
         content = [l for l in f.readlines() if l.strip() and not l.startswith("#")]
     asflib = {}
-    for chunk in [content[i:i+3] for i in range(0, len(content), 3)]:
+    for chunk in [content[i : i + 3] for i in range(0, len(content), 3)]:
         element = chunk[0].split()[1]
         a = [float(e) for e in chunk[1].split()]
         b = [float(e) for e in chunk[2].split()]
         asflib[element] = {"a": a, "b": b}
-
     return asflib
 
 
@@ -70,14 +70,13 @@ def compute_frame_density(elements, positions, bbmax, dv, cutoff, asflib):
 def create_universe(psf, dcd):
     print("creating universe...")
     u = MDAnalysis.Universe(psf, dcd, dt=0)
-    u_guesser = MDAnalysis.guesser.DefaultGuesser(u)
-    guessed_elements = [u_guesser.guess_atom_element(name) for name in u.atoms.names]
-    u.add_TopologyAttr("elements", guessed_elements)
+    u.guess_TopologyAttrs(context="default", to_guess=["elements"])
     print("done.")
     return u
 
 
 def compute_rho_universe(u, bbmax, dv, cutoff):
+    print("Computing density for each frame...")
     asflib = load_sucoppens()
     rho_universe = []
     nframes = len(u.trajectory)
@@ -90,152 +89,68 @@ def compute_rho_universe(u, bbmax, dv, cutoff):
         print("%d/%d" % (index + 1, nframes), end="\r")
         rho = compute_frame_density(elements, centered_positions[index], bbmax, dv, cutoff, asflib)
         rho_universe.append(rho)
+    print("done.")
     return rho_universe
 
 
 def save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path):
-    print("saving density...")
+    print(f"Saving density to {save_path}...")
+    bbmax_string = str(bbmax).replace(".", "d")
     dv_string = str(dv).replace(".", "d")
-    outfile = os.path.join(save_path,f"{system}_{bbmax}bb_{dv_string}dv_{cutoff}co.h5")
+    cutoff_string = str(cutoff).replace(".", "d")
+    outfile = os.path.join(save_path, f"{system}_{bbmax_string}bb_{dv_string}dv_{cutoff_string}co.h5")
     with h5py.File(outfile, "w") as f:
         f.create_dataset("rho", data=rho_universe)
     print("done.")
 
 
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "--bbmax",
-        help="Maximum dimension of the bounding box (Å)",
-        required=True,
-        type=float
-    )
-
-    parser.add_argument(
-        "--dv",
-        help="Grid spacing in Å",
-        required=True,
-        type=float
-    )
-
-    parser.add_argument(
-        "--cutoff",
-        help="Cutoff radius around each atom (Å)",
-        type=float,
-        default=5.0
-    )
-
-    parser.add_argument(
-        "--pdb_path",
-        help="Path to directory containing aligned PDBs",
-        type=str
-    )
-
-    parser.add_argument(
-        "--trajectory",
-        help="Path to MD trajectory file (e.g. DCD)",
-        type=str
-    )
-
-    parser.add_argument(
-        "--reference_pdb",
-        help="Reference structure (PDB) used as topology for PDB ensembles",
-        type=str
-    )
-
-    parser.add_argument(
-        "--topology",
-        help="Topology file for MD trajectory (PSF, GRO, PDB, etc.)",
-        type=str
-    )
-
-    parser.add_argument(
-        "--save_path",
-        help="Output HDF5 file",
-        required=True,
-        type=str
-    )
-
-    parser.add_argument(
-        "--system",
-        help="Identifier for data set (PDB id or protein name for example)",
-        required=True,
-        type=str
-    )
-
-    args = parser.parse_args()
-    system = args.system
-    bbmax = args.bbmax
-    dv = args.dv
-    cutoff = args.cutoff
-
-    # ------------------------------------------------------------------
-    # Validate input mode
-    # ------------------------------------------------------------------
-
+def interpret_user_input(args, parser):
     if args.pdb_path and (args.topology or args.trajectory):
-        parser.error(
-            "--pdb_path cannot be used together with "
-            "--topology or --trajectory. "
-            "Choose either a PDB ensemble or an MD trajectory."
-        )
-
-    # MD trajectory mode
+        parser.error("--pdb_path cannot be used together with " "--topology or --trajectory. " "Choose either a PDB ensemble or an MD trajectory.")
     if args.topology and args.trajectory:
-
         print("Using MD trajectory mode")
-
         psf = args.topology
         dcd = args.trajectory
-
-    # PDB ensemble mode
+        print(f"Using {psf} as reference PDB")
+        print(f"Using {dcd} as trajectory")
     elif args.pdb_path:
-
         print("Using aligned PDB ensemble mode")
-        models = sorted(glob.glob(os.path.join(args.pdb_path, "*.pdb")),key=natsort)        
-        # Remove reference structure if it's already in the list
+        models = sorted(glob.glob(os.path.join(args.pdb_path, "*.pdb")), key=natsort)
+        # Remove reference structure if in the list
         models = [m for m in models if os.path.abspath(m) != os.path.abspath(args.reference_pdb)]
+        if len(models) == 0:
+            parser.error(f"No PDB files found in: {args.pdb_path}")
         # Put reference structure first
         dcd = [args.reference_pdb] + models
-        if len(dcd) == 0:
-            parser.error(
-                f"No PDB files found in: {args.pdb_path}"
-            )
-        print(f"Found {len(dcd)} PDB files")
         psf = args.reference_pdb
-        print(f"Using {psf} as reference pdb")
-
-    # Incomplete MD specification
+        print(f"Using {psf} as reference PDB")
+        print(f"Found {len(dcd)} PDB files")
     elif args.topology or args.trajectory:
-
-        parser.error(
-            "--topology and --trajectory must be provided together."
-        )
-
-    # Nothing provided
+        parser.error("--topology and --trajectory must be provided together.")
     else:
+        parser.error("Either provide:\n" "  --topology AND --trajectory\n" "or\n" "  --pdb_path")
 
-        parser.error(
-            "Either provide:\n"
-            "  --topology AND --trajectory\n"
-            "or\n"
-            "  --pdb_path"
-        )
+    return psf, dcd
 
-    # ------------------------------------------------------------------
-    # Compute densities
-    # ------------------------------------------------------------------
 
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bbmax", help="Maximum dimension of the bounding box (Å)", required=True, type=float)
+    parser.add_argument("--dv", help="Grid spacing in Å", required=True, type=float)
+    parser.add_argument("--cutoff", help="Cutoff radius around each atom (Å)", type=float, default=5.0)
+    parser.add_argument("--pdb_path", help="Path to directory containing aligned PDBs", type=str)
+    parser.add_argument("--trajectory", help="Path to MD trajectory file (e.g. DCD)", type=str)
+    parser.add_argument("--reference_pdb", help="Reference structure (PDB) used as topology for PDB ensembles", type=str)
+    parser.add_argument("--topology", help="Topology file for MD trajectory (PSF, GRO, PDB, etc.)", type=str)
+    parser.add_argument("--save_path", help="Output HDF5 file", required=True, type=str)
+    parser.add_argument("--system", help="Identifier for data set (PDB id or protein name for example)", required=True, type=str)
+    args = parser.parse_args()
+    psf, dcd = interpret_user_input(args, parser)
+    return psf, dcd, args.system, args.bbmax, args.dv, args.cutoff, args.save_path
+
+
+if __name__ == "__main__":
+    psf, dcd, system, bbmax, dv, cutoff, save_path = parse_arguments()
     u = create_universe(psf, dcd)
-
-    rho_universe = compute_rho_universe(
-        u,
-        bbmax,
-        dv,
-        cutoff
-    )
-
-    print(f"Saving density to {args.save_path}")
-    save_rho_universe(rho_universe,system,bbmax,dv,cutoff,args.save_path)
+    rho_universe = compute_rho_universe(u, bbmax, dv, cutoff)
+    save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path)

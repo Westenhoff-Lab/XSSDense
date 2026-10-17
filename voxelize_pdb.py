@@ -10,10 +10,10 @@ def natsort(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", s)]
 
 
-def sel_window(c, cutoff, bmax, dv, limit):
-    min_idx = int(numpy.ceil((c - cutoff + bmax) / dv))
-    max_idx = int(numpy.ceil((c + cutoff + bmax) / dv))
-    return max(0, min_idx), min(max_idx, limit)
+def sel_window(c, cutoff, origin, dv, npoints):
+    lo = int(numpy.ceil((c - cutoff - origin) / dv))
+    hi = int(numpy.floor((c + cutoff - origin) / dv)) + 1
+    return max(lo, 0), min(hi, npoints)
 
 
 def compute_rho(rs, element_parms, beta=0.0):
@@ -45,17 +45,17 @@ def estimate_beta(resolution):
     return 8 * numpy.pi**2 * (resolution / 2) ** 2
 
 
-def compute_frame_density(elements, positions, bbmax, dv, cutoff, asflib):
+def compute_frame_density(elements, positions, l, dv, cutoff, asflib):
     true_atom_electrons = {"H": 1, "C": 6, "N": 7, "O": 8, "S": 16}
     beta = estimate_beta(dv)
-    l = numpy.arange(-bbmax, bbmax + dv, dv)
     npoints = len(l)
+    origin = l[0]
     rho = numpy.zeros((npoints, npoints, npoints), dtype=numpy.float32)
     for element, coord in zip(elements, positions):
         params = asflib[element]
-        xmin, xmax = sel_window(coord[0], cutoff, bbmax, dv, npoints)
-        ymin, ymax = sel_window(coord[1], cutoff, bbmax, dv, npoints)
-        zmin, zmax = sel_window(coord[2], cutoff, bbmax, dv, npoints)
+        xmin, xmax = sel_window(coord[0], cutoff, origin, dv, npoints)
+        ymin, ymax = sel_window(coord[1], cutoff, origin, dv, npoints)
+        zmin, zmax = sel_window(coord[2], cutoff, origin, dv, npoints)
         dx = l[xmin:xmax] - coord[0]
         dy = l[ymin:ymax] - coord[1]
         dz = l[zmin:zmax] - coord[2]
@@ -75,30 +75,25 @@ def create_universe(psf, dcd):
     return u
 
 
-def compute_rho_universe(u, bbmax, dv, cutoff):
+def compute_rho_universe(elements, centered_positions, l, dv, cutoff):
     print("Computing density for each frame...")
     asflib = load_sucoppens()
-    rho_universe = []
-    nframes = len(u.trajectory)
-    sel = u.select_atoms("not element H")
-    elements = sel.atoms.elements
-    positions = numpy.array([sel.positions for _ in u.trajectory])
-    means = numpy.mean(positions, axis=1, keepdims=True)
-    centered_positions = positions - means
-    for index in range(nframes):
-        print("%d/%d" % (index + 1, nframes), end="\r")
-        rho = compute_frame_density(elements, centered_positions[index], bbmax, dv, cutoff, asflib)
-        rho_universe.append(rho)
+    nframes = len(centered_positions)
+    rho_universe = numpy.empty((nframes, len(l), len(l), len(l)), dtype=numpy.float32)
+    for index, frame_positions in enumerate(centered_positions):
+        print(f"{index + 1}/{nframes}", end="\r")
+        rho_universe[index] = compute_frame_density(elements, frame_positions, l, dv, cutoff, asflib)
     print("done.")
     return rho_universe
 
 
 def save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path):
     print(f"Saving density to {save_path}...")
-    bbmax_string = str(bbmax).replace(".", "d")
-    dv_string = str(dv).replace(".", "d")
-    cutoff_string = str(cutoff).replace(".", "d")
+    bbmax_string = f"{bbmax:g}".replace(".", "d")
+    dv_string = f"{dv:g}".replace(".", "d")
+    cutoff_string = f"{cutoff:g}".replace(".", "d")
     outfile = os.path.join(save_path, f"{system}_{bbmax_string}bb_{dv_string}dv_{cutoff_string}co.h5")
+    print(f"Saving density to {outfile}...")
     with h5py.File(outfile, "w") as f:
         f.create_dataset("rho", data=rho_universe)
     print("done.")
@@ -129,14 +124,36 @@ def interpret_user_input(args, parser):
         parser.error("--topology and --trajectory must be provided together.")
     else:
         parser.error("Either provide:\n" "  --topology AND --trajectory\n" "or\n" "  --pdb_path")
-
     return psf, dcd
+
+
+def get_centered_positions(u, selection):
+    """Return element symbols and per-frame centred coordinates, shape (nframes, natoms, 3)."""
+    sel = u.select_atoms(selection)
+    positions = numpy.array([sel.positions for _ in u.trajectory])
+    centered = positions - positions.mean(axis=1, keepdims=True)
+    return sel.elements, centered
+
+
+def find_bbmax(centered_positions, margin=4):
+    return numpy.ceil(numpy.abs(centered_positions).max()) + margin
+
+
+# def define_grid(bbmax, n_voxels):
+#     dv = 2 * bbmax / n_voxels
+#     l = -bbmax + dv * (numpy.arange(n_voxels) + 0.5)  # voxel centres
+#     return l, numpy.round(dv,2)
+
+def define_grid(bbmax, n_voxels):
+    dv = numpy.ceil(2 * bbmax / (n_voxels - 1) * 100) / 100
+    l = -bbmax + dv * numpy.arange(n_voxels)
+    return l, dv
 
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bbmax", help="Maximum dimension of the bounding box (Å)", required=True, type=float)
-    parser.add_argument("--dv", help="Grid spacing in Å", required=True, type=float)
+    parser.add_argument("--bbmax", help="Maximum dimension of the bounding box (Å)", default=None, type=float)
+    parser.add_argument("--n_voxels", help="Number of voxels for density (must match autoencoder)", default=52)
     parser.add_argument("--cutoff", help="Cutoff radius around each atom (Å)", type=float, default=5.0)
     parser.add_argument("--pdb_path", help="Path to directory containing aligned PDBs", type=str)
     parser.add_argument("--trajectory", help="Path to MD trajectory file (e.g. DCD)", type=str)
@@ -144,13 +161,19 @@ def parse_arguments():
     parser.add_argument("--topology", help="Topology file for MD trajectory (PSF, GRO, PDB, etc.)", type=str)
     parser.add_argument("--save_path", help="Output HDF5 file", required=True, type=str)
     parser.add_argument("--system", help="Identifier for data set (PDB id or protein name for example)", required=True, type=str)
+    parser.add_argument("--selection", help="Selection inside the PDB file", default="protein and not element H", type=str)
     args = parser.parse_args()
     psf, dcd = interpret_user_input(args, parser)
-    return psf, dcd, args.system, args.bbmax, args.dv, args.cutoff, args.save_path
+    return psf, dcd, args.selection, args.system, args.bbmax, args.n_voxels, args.cutoff, args.save_path
 
 
 if __name__ == "__main__":
-    psf, dcd, system, bbmax, dv, cutoff, save_path = parse_arguments()
+    psf, dcd, selection, system, bbmax, n_voxels, cutoff, save_path = parse_arguments()
     u = create_universe(psf, dcd)
-    rho_universe = compute_rho_universe(u, bbmax, dv, cutoff)
+    elements, centered = get_centered_positions(u, selection)
+    if bbmax is None:
+        bbmax = find_bbmax(centered)
+    l, dv = define_grid(bbmax, n_voxels)
+    print(f"bounding box: {bbmax} Å, num. of voxels: {n_voxels}, voxel size: {dv} Å")
+    rho_universe = compute_rho_universe(elements, centered, l, dv, cutoff)
     save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path)

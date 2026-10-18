@@ -1,36 +1,28 @@
 # coding: utf-8
 
 """
-Voxel-only TFRecord pipeline with global min–max normalization [0, 1]
+Voxel-only TFRecord pipeline with global min-max normalization [0, 1]
 
 Input:
-- Directory of .npy files, each with shape (52, 52, 52)
+- single .h5 files, containting dataset 'rho' of shape (N, grid_size, grid_size, grid_size)
 
 Output:
 - TFRecords (train/test)
-- Metadata JSON with normalization parameters
+- JSON metadata with normalization parameters
 
 Usage:
-  python voxels_to_tfrecords_minmax.py <voxels_dir> <output_dir>
+  python voxels_to_tfrecords.py --voxels_dir <voxels_dir> --output_dir <output_dir>
 """
 
 import os
-import sys
-import glob
 import json
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 import h5py
-import hashlib
+import argparse
 
-# ─────────────────────────────────────────────
-# Configuration
-# ─────────────────────────────────────────────
-GRID_SIZE = 52
-TRAIN_SPLIT_MOD = 10      # every 5th sample → test
-NUM_THREADS = 8
 
 # ─────────────────────────────────────────────
 # TFRecord helpers
@@ -39,94 +31,95 @@ def serialize_example(flat_array, index):
     return tf.train.Example(
         features=tf.train.Features(
             feature={
-                "data": tf.train.Feature(
-                    float_list=tf.train.FloatList(value=flat_array)
-                ),
-                "index": tf.train.Feature(
-                    int64_list=tf.train.Int64List(value=[index])
-                ),
+                "data": tf.train.Feature(float_list=tf.train.FloatList(value=flat_array)),
+                "index": tf.train.Feature(int64_list=tf.train.Int64List(value=[index])),
             }
         )
     ).SerializeToString()
+
+
+def serialize_frame(args):
+    idx, flat = args
+    return idx, serialize_example(flat, idx)
+
+
+def frame_jobs(voxels):
+    for idx in range(len(voxels)):
+        yield idx, voxels[idx].reshape(-1)
+
 
 def write_tfrecord(filename, examples):
     with tf.io.TFRecordWriter(filename) as writer:
         for ex in tqdm(examples, desc=f"Writing {os.path.basename(filename)}"):
             writer.write(ex)
 
+
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--voxels_dir", help="Directory containing voxel .h5 files", required=True)
+    parser.add_argument("--output_dir", help="Directory to save TFRecords and metadata", required=True)
+    parser.add_argument("--grid_size", help="Size of the voxel grid", default=52, type=int)
+    parser.add_argument("--train_split_mod", help="Modulo for train/test split (every Nth sample goes to test)", default=10, type=int)
+    parser.add_argument("--num_proc", help="Number of processes for parallel processing", default=8, type=int)
+    return parser.parse_args()
+
+
 # ─────────────────────────────────────────────
 # Main workflow
 # ─────────────────────────────────────────────
-def run_workflow(voxels_dir, output_dir):
-
+def run_workflow(voxels_dir, output_dir, grid_size, train_split_mod, num_proc):
     output_dir = os.path.abspath(output_dir)
-
     tf_out = os.path.join(output_dir, "tfrecords")
     meta_out = os.path.join(output_dir, "meta")
-
     os.makedirs(tf_out, exist_ok=True)
     os.makedirs(meta_out, exist_ok=True)
-
     # ------------------------------------------------
     # Load voxel files
     # ------------------------------------------------
     with h5py.File(voxels_dir, "r") as voxels_file:
         print(f"Loaded {voxels_file['rho'].shape[0]} samples")
-        voxels = voxels_file['rho'][()]
-        # ------------------------------------------------
-        # Global min–max normalization to [0, 1]
-        # ------------------------------------------------
-        X_MIN = voxels.min()
-        X_MAX = voxels.max()
+        raw = voxels_file["rho"][()]
+    # ------------------------------------------------
+    # Global min-max normalization to [0, 1]
+    # ------------------------------------------------
+    X_MIN = raw.min()
+    X_MAX = raw.max()
 
-        if X_MAX <= X_MIN:
-            raise RuntimeError(
-                f"Invalid normalization range: min={X_MIN}, max={X_MAX}"
-            )
+    if X_MAX <= X_MIN:
+        raise RuntimeError(f"Invalid normalization range: min={X_MIN}, max={X_MAX}")
 
-        voxels = (voxels - X_MIN) / (X_MAX - X_MIN)
-        voxels = voxels.astype(np.float32)
+    voxels = raw.astype(np.float32)
+    voxels = (voxels - X_MIN) / (X_MAX - X_MIN)
+    del raw  # free memory
 
     # Sanity check
     print(f"Normalization:")
     print(f"  global min = {X_MIN:.6g}")
     print(f"  global max = {X_MAX:.6g}")
     print(f"  after norm → min={voxels.min():.3f}, max={voxels.max():.3f}")
-
     # ------------------------------------------------
     # Serialize to TFRecords
     # ------------------------------------------------
     examples_train = []
     examples_test = []
 
-    def process_sample(idx):
-        flat = voxels[idx].reshape(-1)
-        return idx, serialize_example(flat, idx)
-
-    with ThreadPoolExecutor(max_workers=NUM_THREADS) as executor:
-        results = list(
-            tqdm(
-                executor.map(process_sample, range(len(voxels))),
-                total=len(voxels),
-                desc="Serializing"
-            )
-        )
+    with ProcessPoolExecutor(max_workers=num_proc) as executor:
+        results = list(tqdm(executor.map(serialize_frame, frame_jobs(voxels), chunksize=16), total=len(voxels), desc="Serializing"))
 
     for idx, ex in results:
-        if idx % TRAIN_SPLIT_MOD == 0:
+        if idx % train_split_mod == 0:
             examples_test.append(ex)
         else:
             examples_train.append(ex)
 
     write_tfrecord(os.path.join(tf_out, "train.tfrecords"), examples_train)
     write_tfrecord(os.path.join(tf_out, "test.tfrecords"), examples_test)
-
     # ------------------------------------------------
     # Metadata
     # ------------------------------------------------
     meta = {
-        "grid_size": GRID_SIZE,
-        "voxel_shape": [GRID_SIZE, GRID_SIZE, GRID_SIZE],
+        "grid_size": grid_size,
+        "voxel_shape": [grid_size, grid_size, grid_size],
         "voxel_count": len(voxels),
         "train_samples": len(examples_train),
         "test_samples": len(examples_test),
@@ -147,16 +140,7 @@ def run_workflow(voxels_dir, output_dir):
     print(f"  Test TFRecord : {os.path.join(tf_out, 'test.tfrecords')}")
     print(f"  Meta          : {os.path.join(meta_out, 'meta.json')}")
 
-# ─────────────────────────────────────────────
-# CLI
-# ─────────────────────────────────────────────
+
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("Usage: python voxels_to_tfrecords_minmax.py <voxels_dir> <output_dir>")
-        sys.exit(1)
-
-    voxels_dir = sys.argv[1]
-    output_dir = sys.argv[2]
-
-    run_workflow(voxels_dir, output_dir)
-
+    args = parse_arguments()
+    run_workflow(args.voxels_dir, args.output_dir, args.grid_size, args.train_split_mod, args.num_proc)

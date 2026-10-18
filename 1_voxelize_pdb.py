@@ -1,3 +1,4 @@
+"""using a pdb ensemble or an MD trajectory, compute the electron density on a 3D grid and save it to an HDF5 file"""
 import numpy
 import MDAnalysis
 import glob, re, os
@@ -139,11 +140,6 @@ def find_bbmax(centered_positions, margin=4):
     return numpy.ceil(numpy.abs(centered_positions).max()) + margin
 
 
-# def define_grid(bbmax, n_voxels):
-#     dv = 2 * bbmax / n_voxels
-#     l = -bbmax + dv * (numpy.arange(n_voxels) + 0.5)  # voxel centres
-#     return l, numpy.round(dv,2)
-
 def define_grid(bbmax, n_voxels):
     dv = numpy.ceil(2 * bbmax / (n_voxels - 1) * 100) / 100
     l = -bbmax + dv * numpy.arange(n_voxels)
@@ -153,7 +149,7 @@ def define_grid(bbmax, n_voxels):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--bbmax", help="Maximum dimension of the bounding box (Å)", default=None, type=float)
-    parser.add_argument("--n_voxels", help="Number of voxels for density (must match autoencoder)", default=52)
+    parser.add_argument("--n_voxels", help="Number of voxels for density (must match autoencoder)", default=52, type=int)
     parser.add_argument("--cutoff", help="Cutoff radius around each atom (Å)", type=float, default=5.0)
     parser.add_argument("--pdb_path", help="Path to directory containing aligned PDBs", type=str)
     parser.add_argument("--trajectory", help="Path to MD trajectory file (e.g. DCD)", type=str)

@@ -9,15 +9,20 @@ and stronger regularised latent space in later epochs. Scheduling is linear over
 """
 
 # =========================================================
-# GPU memory: enable growth (prevents full VRAM pre-allocation)
+# GPU detection and memory growth
 # =========================================================
 gpus = tf.config.list_physical_devices('GPU')
-for gpu in gpus:
-    try:
-        tf.config.experimental.set_memory_growth(gpu, True)
-    except Exception as e:
-        print("Could not set memory growth:", e)
 
+if gpus:
+    print(f"GPU DETECTED: TensorFlow found {len(gpus)} GPU(s):")
+    for i, gpu in enumerate(gpus):
+        print(f"  GPU {i}: {gpu.name}")
+        try:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        except Exception as e:
+            print(f"  Could not set memory growth: {e}")
+else:
+    print("WARNING: No GPU detected by TensorFlow. Running on CPU.")
 # =========================================================
 # Config
 # =========================================================

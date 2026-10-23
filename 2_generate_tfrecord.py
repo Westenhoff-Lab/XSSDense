@@ -79,6 +79,15 @@ def run_workflow(voxels_dir, output_dir, grid_size, train_split_mod, num_proc):
     with h5py.File(voxels_dir, "r") as voxels_file:
         print(f"Loaded {voxels_file['rho'].shape[0]} samples")
         raw = voxels_file["rho"][()]
+        dv = voxels_file["dv"][()]
+
+    n_electrons_per_sample = np.sum(raw, axis=tuple(range(1, raw.ndim))) * dv**3
+    n_electrons = np.mean(n_electrons_per_sample)
+    n_electrons_std = np.std(n_electrons_per_sample)
+    rel_spread = n_electrons_std / n_electrons
+    print(f"num electrons: mean={n_electrons:.6g}, rel. std={rel_spread:.2%}")
+    if rel_spread > 0.01:
+        print("WARNING: sums vary >1% — electron count may not be constant, or density is clipped at the box edge")
     # ------------------------------------------------
     # Global min-max normalization to [0, 1]
     # ------------------------------------------------
@@ -90,13 +99,17 @@ def run_workflow(voxels_dir, output_dir, grid_size, train_split_mod, num_proc):
 
     voxels = raw.astype(np.float32)
     voxels = (voxels - X_MIN) / (X_MAX - X_MIN)
+
+
+    sample_sums = np.sum(voxels, axis=tuple(range(1, voxels.ndim)))
+    target_sum = float(sample_sums.mean())
     del raw  # free memory
 
     # Sanity check
     print(f"Normalization:")
     print(f"  global min = {X_MIN:.6g}")
     print(f"  global max = {X_MAX:.6g}")
-    print(f"  after norm → min={voxels.min():.3f}, max={voxels.max():.3f}")
+    print(f"  after norm → min={voxels.min():.3f}, max={voxels.max():.3f}, density sum: {target_sum:.3f}")
     # ------------------------------------------------
     # Serialize to TFRecords
     # ------------------------------------------------
@@ -128,6 +141,11 @@ def run_workflow(voxels_dir, output_dir, grid_size, train_split_mod, num_proc):
             "type": "minmax",
             "min": float(X_MIN),
             "max": float(X_MAX),
+        },
+        "electron_conservation": {
+            "n_electrons": float(n_electrons),
+            "target_sum_normalized": float(target_sum),
+            "n_electrons_std": float(n_electrons_std),
         },
         "source_dir": voxels_dir,
     }

@@ -97,6 +97,8 @@ def save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path):
     print(f"Saving density to {outfile}...")
     with h5py.File(outfile, "w") as f:
         f.create_dataset("rho", data=rho_universe)
+        f.create_dataset("dv", data=dv)
+        f.create_dataset("bbmax", data=bbmax)
     print("done.")
 
 

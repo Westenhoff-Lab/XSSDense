@@ -1,4 +1,5 @@
 """using a pdb ensemble or an MD trajectory, compute the electron density on a 3D grid and save it to an HDF5 file"""
+
 import numpy
 import MDAnalysis
 import glob, re, os

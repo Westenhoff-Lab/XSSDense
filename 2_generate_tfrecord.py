@@ -1,5 +1,3 @@
-# coding: utf-8
-
 """
 Voxel-only TFRecord pipeline with global min-max normalization [0, 1]
 
@@ -28,14 +26,7 @@ import argparse
 # TFRecord helpers
 # ─────────────────────────────────────────────
 def serialize_example(flat_array, index):
-    return tf.train.Example(
-        features=tf.train.Features(
-            feature={
-                "data": tf.train.Feature(float_list=tf.train.FloatList(value=flat_array)),
-                "index": tf.train.Feature(int64_list=tf.train.Int64List(value=[index])),
-            }
-        )
-    ).SerializeToString()
+    return tf.train.Example(features=tf.train.Features(feature={"data": tf.train.Feature(float_list=tf.train.FloatList(value=flat_array)), "index": tf.train.Feature(int64_list=tf.train.Int64List(value=[index]))})).SerializeToString()
 
 
 def serialize_frame(args):
@@ -99,7 +90,6 @@ def run_workflow(voxels_dir, output_dir, grid_size, train_split_mod, num_proc):
 
     voxels = raw.astype(np.float32)
     voxels = (voxels - X_MIN) / (X_MAX - X_MIN)
-
 
     sample_sums = np.sum(voxels, axis=tuple(range(1, voxels.ndim)))
     target_sum = float(sample_sums.mean())

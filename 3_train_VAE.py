@@ -8,11 +8,11 @@ from helper import redirect_tf_cpp_logs
 redirect_tf_cpp_logs.redirect()
 import argparse
 import json
-import numpy as np
+import numpy
 import tensorflow as tf
 from pathlib import Path
-import tensorflow as tf
 from helper.VAE import GRID_SIZE, INPUT_SHAPE, build_vae
+from scipy.ndimage import binary_dilation
 
 # =========================================================
 # Constants
@@ -47,7 +47,7 @@ def configure_gpu(mixed_precision=True):
 
 def set_seeds(seed):
     tf.random.set_seed(seed)
-    np.random.seed(seed)
+    numpy.random.seed(seed)
 
 
 # =========================================================
@@ -66,6 +66,8 @@ def parse_arguments():
     parser.add_argument("--learning_rate", type=float, default=3e-4, help="Initial Adam learning rate (default: 3e-4)")
     parser.add_argument("--epochs", type=int, default=80, help="Number of training epochs (default: 80)")
     parser.add_argument("--batchsize", type=int, default=64, help="Batch size (default: 64)")
+    parser.add_argument("--patience", type=int, default=5, help="Stop after this many epochs without improvement in validation MSE (default: 5)")
+    parser.add_argument("--min_improvement", type=int, default=0.01, help="Relative drop in the ValMSE that counts as improvement")
     args = parser.parse_args()
 
     explicit = [args.train_datapath, args.test_datapath, args.meta_datapath]
@@ -99,17 +101,36 @@ def count_records(path):
     return sum(1 for _ in tf.data.TFRecordDataset(path))
 
 
-def make_train_val_datasets(path, num_samples, batchsize, val_fraction=0.1):
-    """Fixed split: the first `val_fraction` of the file is validation, the rest training.
-
-    Returns the unbatched training dataset (shuffled per epoch by make_epoch_dataset),
-    the batched and cached validation dataset, and the number of training samples.
+def make_train_val_datasets(path, num_samples, batchsize, block=100):
+    """Block split over the whole trajectory.
+    The records are cut into blocks of `block` consecutive records; every `val_every`-th
+    block is validation.
     """
-    ds = tf.data.TFRecordDataset(path).map(parse_tfrecord, num_parallel_calls=AUTOTUNE)
-    val_size = int(val_fraction * num_samples)
-    val_ds = ds.take(val_size).batch(batchsize).cache().prefetch(AUTOTUNE)
-    train_base = ds.skip(val_size)
-    return train_base, val_ds, num_samples - val_size
+    pos = numpy.arange(num_samples)
+    is_val = (pos // block) == 0
+    is_train = ~is_val
+
+    print(f"split: {is_val.sum()} validation, {is_train.sum()} training")
+
+    is_val = tf.constant(is_val)
+    is_train = tf.constant(is_train)
+
+    def in_val(i, rec):
+        return is_val[i]
+
+    def in_train(i, rec):
+        return is_train[i]
+
+    def drop_index(i, rec):
+        return rec
+
+    raw = tf.data.TFRecordDataset(path).enumerate()
+    val_raw = raw.filter(in_val).map(drop_index)
+    train_raw = raw.filter(in_train).map(drop_index)
+
+    val_ds = val_raw.map(parse_tfrecord, num_parallel_calls=AUTOTUNE).batch(batchsize).cache().prefetch(AUTOTUNE)
+    train_base = train_raw.map(parse_tfrecord, num_parallel_calls=AUTOTUNE)
+    return train_base, val_ds, int(is_train.numpy().sum())
 
 
 def make_epoch_dataset(train_base, batchsize, seed, shuffle_buffer=5000):
@@ -118,90 +139,6 @@ def make_epoch_dataset(train_base, batchsize, seed, shuffle_buffer=5000):
 
 def make_test_dataset(path, batchsize):
     return tf.data.TFRecordDataset(path).map(parse_tfrecord, num_parallel_calls=AUTOTUNE).batch(batchsize).prefetch(AUTOTUNE)
-
-
-# # =========================================================
-# # Model
-# # =========================================================
-# @tf.keras.utils.register_keras_serializable()
-# class ElectronConservation(tf.keras.layers.Layer):
-#     """Rescales each density grid so that its voxel sum equals `target_sum`."""
-
-#     def __init__(self, target_sum, eps=1e-7, **kwargs):
-#         super().__init__(**kwargs)
-#         self.target_sum = float(target_sum)
-#         self.eps = eps
-
-#     def call(self, rho):
-#         total = tf.reduce_sum(rho, axis=[1, 2, 3, 4], keepdims=True)
-#         return rho * (self.target_sum / (total + self.eps))
-
-#     def get_config(self):
-#         cfg = super().get_config()
-#         cfg.update(target_sum=self.target_sum, eps=self.eps)
-#         return cfg
-
-
-# def build_encoder(z_dim):
-#     conv = dict(padding="same", activation="relu", kernel_initializer="he_normal")
-#     inputs = tf.keras.Input(shape=INPUT_SHAPE)
-#     x = tf.keras.layers.Conv3D(64, 3, **conv)(inputs)
-#     x = tf.keras.layers.Conv3D(64, 3, **conv)(x)
-#     x = tf.keras.layers.MaxPool3D(2)(x)
-#     x = tf.keras.layers.Conv3D(128, 3, **conv)(x)
-#     x = tf.keras.layers.Conv3D(128, 3, **conv)(x)
-#     x = tf.keras.layers.MaxPool3D(2)(x)
-#     x = tf.keras.layers.Conv3D(128, 3, **conv)(x)
-#     x = tf.keras.layers.Conv3D(128, 3, **conv)(x)
-#     x = tf.keras.layers.Flatten()(x)
-#     z = tf.keras.layers.Dense(z_dim * 2, activation=None, dtype="float32")(x)  # mean and logvar
-#     return tf.keras.Model(inputs, z, name="encoder")
-
-
-# def build_decoder(z_dim, target_sum):
-#     conv = dict(padding="same", activation="relu", kernel_initializer="he_normal")
-#     latent_inputs = tf.keras.Input(shape=(z_dim,))
-#     x = tf.keras.layers.Dense(LATENT_GRID**3 * 32, activation="relu", kernel_initializer="he_normal")(latent_inputs)
-#     x = tf.keras.layers.Reshape((LATENT_GRID, LATENT_GRID, LATENT_GRID, 32))(x)
-#     x = tf.keras.layers.Conv3DTranspose(64, 5, strides=2, **conv)(x)
-#     x = tf.keras.layers.Conv3DTranspose(128, 5, strides=2, **conv)(x)
-#     rho = tf.keras.layers.Conv3D(1, 3, padding="same", activation="softplus", dtype="float32")(x)
-#     outputs = ElectronConservation(target_sum, dtype="float32")(rho)
-#     return tf.keras.Model(latent_inputs, outputs, name="decoder")
-
-
-# class VAE(tf.keras.Model):
-#     def __init__(self, latent_dim, encoder, decoder):
-#         super().__init__()
-#         self.latent_dim = latent_dim
-#         self.encoder = encoder
-#         self.decoder = decoder
-
-#     def get_config(self):
-#         return {"latent_dim": self.latent_dim}
-
-#     def encode(self, x):
-#         mean, logvar = tf.split(self.encoder(x), num_or_size_splits=2, axis=1)
-#         logvar = tf.clip_by_value(logvar, -10.0, 10.0)
-#         return mean, logvar
-
-#     def reparameterize(self, mean, logvar):
-#         eps = tf.random.normal(shape=tf.shape(mean))
-#         return eps * tf.exp(0.5 * logvar) + mean
-
-#     def decode(self, z):
-#         return self.decoder(z)
-
-#     def call(self, x):
-#         mean, logvar = self.encode(x)
-#         z = self.reparameterize(mean, logvar)
-#         return self.decode(z)
-
-
-# def build_vae(z_dim, target_sum):
-#     vae = VAE(z_dim, build_encoder(z_dim), build_decoder(z_dim, target_sum))
-#     vae(tf.zeros((1, *INPUT_SHAPE)))  # create all variables
-#     return vae
 
 
 # =========================================================
@@ -249,12 +186,6 @@ def make_optimizer(learning_rate, total_steps, warmup_fraction=0.05):
     return tf.keras.mixed_precision.LossScaleOptimizer(adam)
 
 
-# def make_optimizer(learning_rate, total_steps):
-# lr_schedule = tf.keras.optimizers.schedules.CosineDecay(learning_rate, decay_steps=total_steps, alpha=0.05)
-# adam = tf.keras.optimizers.Adam(lr_schedule, clipnorm=1.0, jit_compile=False)
-# return tf.keras.mixed_precision.LossScaleOptimizer(adam)
-
-
 def make_train_step(model, optimizer, beta_var):
     """Compiled train step. Reads beta from `beta_var`, so changing beta doesn't retrace."""
 
@@ -290,6 +221,9 @@ def train(vae, train_base, val_ds, steps_per_epoch, args, log_dir):
     beta_var = tf.Variable(0.0, dtype=tf.float32, trainable=False)
     optimizer = make_optimizer(args.learning_rate, total_steps)
     train_step = make_train_step(vae, optimizer, beta_var)
+    best_val = float("inf")
+    best_path = os.path.join(log_dir, "vae_best.weights.h5")
+    epochs_without_improvement = 0
 
     global_step = 0
     with open(os.path.join(log_dir, "log.txt"), "w") as log_file:
@@ -315,9 +249,9 @@ def train(vae, train_base, val_ds, steps_per_epoch, args, log_dir):
 
             log_message = (
                 f"Epoch {epoch + 1} | "
-                f"TrainLoss: {np.mean(epoch_losses):.5f}, MSE: {np.mean(epoch_mses):.5f}, KL: {np.mean(epoch_kls):.5f} | "
+                f"TrainLoss: {numpy.mean(epoch_losses):.5f}, MSE: {numpy.mean(epoch_mses):.5f}, KL: {numpy.mean(epoch_kls):.5f} | "
                 f"ValLoss: {val_loss:.5f}, ValMSE: {val_mse:.5f}, ValKL: {val_kl:.5f} | "
-                f"Beta: {float(beta_var.numpy()):.5f}"
+                f"Beta: {float(beta_var.numpy()):.5e}"
             )
             print(log_message)
             log_file.write(log_message + "\n")
@@ -325,14 +259,26 @@ def train(vae, train_base, val_ds, steps_per_epoch, args, log_dir):
             os.fsync(log_file.fileno())
 
             vae.save_weights(os.path.join(log_dir, f"vae_epoch_{epoch + 1}.weights.h5"))
+            if val_mse < best_val - args.min_improvement:
+                best_val = val_mse
+                epochs_without_improvement = 0
+                vae.save_weights(best_path)
+                print(f"  new best ValMSE {best_val:.5f}, saved")
+            else:
+                epochs_without_improvement += 1
+                if epochs_without_improvement >= args.patience:
+                    print(f"Early stopping: no improvement for {args.patience} epochs (best ValMSE {best_val:.5f})")
+                    break
 
+    vae.load_weights(best_path)
+    print(f"Restored best weights (ValMSE {best_val:.5f})")
     return beta_var
 
 
 def save_models(vae, log_dir):
     vae.encoder.save(os.path.join(log_dir, "encoder_model.keras"))
     vae.decoder.save(os.path.join(log_dir, "decoder_model.keras"))
-    vae.save_weights(os.path.join(log_dir, "vae_final.weights.h5"))
+    # vae.save_weights(os.path.join(log_dir, "vae_final.weights.h5"))
     print(f"Models saved in {log_dir}")
 
 
@@ -345,10 +291,7 @@ def make_log_dir(args):
     return str(log_dir)
 
 
-# =========================================================
-# Main
-# =========================================================
-def main():
+if __name__ == "__main__":
     configure_gpu(mixed_precision=True)
     set_seeds(SEED)
 
@@ -357,23 +300,15 @@ def main():
     target_sum = meta["electron_conservation"]["target_sum_normalized"]
 
     vae = build_vae(args.z_dim, target_sum)
-
     num_samples = count_records(args.train_datapath)
     train_base, val_ds, num_train = make_train_val_datasets(args.train_datapath, num_samples, args.batchsize)
     steps_per_epoch = num_train // args.batchsize
 
     log_dir = make_log_dir(args)
     os.makedirs(log_dir, exist_ok=True)
-
     beta_var = train(vae, train_base, val_ds, steps_per_epoch, args, log_dir)
-
-    print("\nFinal test evaluation...")
+    print("Final test evaluation...")
     test_ds = make_test_dataset(args.test_datapath, args.batchsize)
     test_loss, test_mse, test_kl = evaluate(vae, test_ds, beta_var)
     print(f"Final test: Loss={test_loss:.5f}, MSE={test_mse:.5f}, KL={test_kl:.5f}")
-
     save_models(vae, log_dir)
-
-
-if __name__ == "__main__":
-    main()

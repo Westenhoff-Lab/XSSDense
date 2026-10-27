@@ -1,19 +1,17 @@
-#!/usr/bin/env python3
 """
-Genetic-algorithm reconstruction of a light-state density from a ΔI(q) curve.
-
-1. Fit the dark state: absolute scale, hydration-shell contrast and thickness.
-2. Search the VAE's latent space with a genetic algorithm. Each candidate is decoded,
-   its ΔI is computed with the dark state's solvent parameters, and only the yield is fitted.
-3. Write the best distinct candidates: latents, densities, CCP4 maps, ΔI curves, summary.
-
+Genetic-algorithm reconstruction of a light-state density from a deltaI(q) curve
 Usage:
-  python ga_reconstruct.py --model_path data/1crn_41bb_1d61dv_5co.vae \
-      --meta data/1crn_41bb_1d61dv_5co.tfrecord/meta/meta.json \
-      --h5 data/1crn_41bb_1d61dv_5co.h5 \
-      --dark_curve data/synthetic_1230_vacuum/ground_abs.csv \
-      --dI_curve data/synthetic_1230_vacuum/deltaI.csv \
-      --rho_bulk 0 --target_yield 1 --output_folder results/synthetic_1230_vacuum
+    python 4_genetic_algorithm.py \
+        --model_path data/1crn_41bb_1d61dv_5co.vae \
+        --meta data/1crn_41bb_1d61dv_5co.tfrecord/meta/meta.json \
+        --h5 data/1crn_41bb_1d61dv_5co.h5 \
+        --dI_curve data/synthetic_1230_vacuum/deltaI.csv \
+        --dark_curve data/synthetic_1230_vacuum/ground_abs.csv \
+        --rho_bulk 0 \
+        --target_yield 1 \
+        --output_folder results/synthetic_1230_vacuum \
+        --padding 3 \
+        --qmax 0.6
 """
 
 import os

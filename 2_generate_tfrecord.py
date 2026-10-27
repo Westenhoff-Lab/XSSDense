@@ -1,15 +1,9 @@
 """
-Voxel-only TFRecord pipeline with global min-max normalization [0, 1]
-
-Input:
-- single .h5 files, containting dataset 'rho' of shape (N, grid_size, grid_size, grid_size)
-
-Output:
-- TFRecords (train/test)
-- JSON metadata with normalization parameters
-
+Saves voxel density as TFRecord with global min-max normalization [0, 1]
 Usage:
-  python voxels_to_tfrecords.py --voxels_dir <voxels_dir> --output_dir <output_dir>
+    python 2_generate_tfrecord.py \
+    --voxels_dir "data/1crn_41bb_1d61dv_5co.h5" \
+    --output_dir "data/1crn_41bb_1d61dv_5co.tfrecord"
 """
 
 import os

@@ -1,5 +1,13 @@
 """
-Train a beta-VAE on voxelized electron densities stored as TFRecords.
+Train a beta-VAE on voxelized electron densities stored as TFRecords
+Usage:
+    python 3_train_VAE.py
+    --datapath "data/1crn_41bb_1d61dv_5co.tfrecord" \
+    --savepath "data" \
+    --epochs=30 \
+    --mode constant \
+    --beta_input 1e-2 \
+    --batchsize 64
 """
 
 import os
@@ -100,15 +108,15 @@ def compute_loss(model, x, beta):
     mean, logvar = model.encode(x)
     z = model.reparameterize(mean, logvar)
     x_pred = model.decode(z)
-    reconstruction = tf.reduce_sum(tf.square(x - x_pred), axis=[1, 2, 3, 4])
-    kl_raw = kl_divergence(mean, tf.exp(0.5 * logvar))
-    total = reconstruction + tf.cast(beta, tf.float32) * kl_raw
-    return tf.reduce_mean(total), tf.reduce_mean(reconstruction), kl_raw
-    # sse = tf.reduce_sum(tf.square(x - x_pred), axis=[1, 2, 3, 4])
-    # l1 = tf.reduce_sum(tf.abs(x - x_pred), axis=[1, 2, 3, 4])
+    # reconstruction = tf.reduce_sum(tf.square(x - x_pred), axis=[1, 2, 3, 4])
     # kl_raw = kl_divergence(mean, tf.exp(0.5 * logvar))
-    # total = l1 + tf.cast(beta, tf.float32) * kl_raw
-    # return tf.reduce_mean(total), tf.reduce_mean(sse), kl_raw
+    # total = reconstruction + tf.cast(beta, tf.float32) * kl_raw
+    # return tf.reduce_mean(total), tf.reduce_mean(reconstruction), kl_raw
+    sse = tf.reduce_sum(tf.square(x - x_pred), axis=[1, 2, 3, 4])
+    l1 = tf.reduce_sum(tf.abs(x - x_pred), axis=[1, 2, 3, 4])
+    kl_raw = kl_divergence(mean, tf.exp(0.5 * logvar))
+    total = l1 + tf.cast(beta, tf.float32) * kl_raw
+    return tf.reduce_mean(total), tf.reduce_mean(sse), kl_raw
     
 
 

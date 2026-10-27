@@ -1,4 +1,13 @@
-"""using a pdb ensemble or an MD trajectory, compute the electron density on a 3D grid and save it to an HDF5 file"""
+"""
+From PDB ensemble or MD trajectory, computes the electron density on a 3D grid and save it to an HDF5 file
+Usage:
+    python 1_voxelize_pdb.py \
+        --topology "data/1crn.psf" \
+        --trajectory "data/1crn_eq_aligned.dcd" \
+        --bbmax 41 \
+        --save_path data \
+        --system "1crn"
+"""
 
 import numpy
 import MDAnalysis

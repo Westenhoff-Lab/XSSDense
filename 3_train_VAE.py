@@ -11,17 +11,13 @@ import json
 import numpy
 import tensorflow as tf
 from pathlib import Path
-from helper.VAE import GRID_SIZE, INPUT_SHAPE, build_vae
-from scipy.ndimage import binary_dilation
+
+from helper.VAE import build_vae, count_records, split_train_val, make_train_dataset, make_val_dataset, make_test_dataset
 
 # =========================================================
 # Constants
 # =========================================================
 SEED = 42
-GRID_SIZE = 52
-LATENT_GRID = GRID_SIZE // 4  # spatial size after the encoder's two 2x poolings
-INPUT_SHAPE = (GRID_SIZE, GRID_SIZE, GRID_SIZE, 1)
-AUTOTUNE = tf.data.AUTOTUNE
 WARMUP_FRACTION = 0.1  # fraction of training steps for the beta warm-up ("late" mode)
 
 
@@ -67,7 +63,8 @@ def parse_arguments():
     parser.add_argument("--epochs", type=int, default=80, help="Number of training epochs (default: 80)")
     parser.add_argument("--batchsize", type=int, default=64, help="Batch size (default: 64)")
     parser.add_argument("--patience", type=int, default=5, help="Stop after this many epochs without improvement in validation MSE (default: 5)")
-    parser.add_argument("--min_improvement", type=int, default=0.01, help="Relative drop in the ValMSE that counts as improvement")
+    parser.add_argument("--min_improvement", type=float, default=0.01, help="Relative drop in the ValMSE that counts as improvement")
+    parser.add_argument("--save_every_epoch", type=bool, default=False, help="Saves weights from every epoch (default: False)")
     args = parser.parse_args()
 
     explicit = [args.train_datapath, args.test_datapath, args.meta_datapath]
@@ -89,59 +86,6 @@ def load_meta(meta_path):
 
 
 # =========================================================
-# Data
-# =========================================================
-def parse_tfrecord(example_proto):
-    features = {"data": tf.io.FixedLenFeature(GRID_SIZE**3, tf.float32)}
-    parsed = tf.io.parse_single_example(example_proto, features)
-    return tf.reshape(parsed["data"], INPUT_SHAPE)
-
-
-def count_records(path):
-    return sum(1 for _ in tf.data.TFRecordDataset(path))
-
-
-def make_train_val_datasets(path, num_samples, batchsize, block=100):
-    """Block split over the whole trajectory.
-    The records are cut into blocks of `block` consecutive records; every `val_every`-th
-    block is validation.
-    """
-    pos = numpy.arange(num_samples)
-    is_val = (pos // block) == 0
-    is_train = ~is_val
-
-    print(f"split: {is_val.sum()} validation, {is_train.sum()} training")
-
-    is_val = tf.constant(is_val)
-    is_train = tf.constant(is_train)
-
-    def in_val(i, rec):
-        return is_val[i]
-
-    def in_train(i, rec):
-        return is_train[i]
-
-    def drop_index(i, rec):
-        return rec
-
-    raw = tf.data.TFRecordDataset(path).enumerate()
-    val_raw = raw.filter(in_val).map(drop_index)
-    train_raw = raw.filter(in_train).map(drop_index)
-
-    val_ds = val_raw.map(parse_tfrecord, num_parallel_calls=AUTOTUNE).batch(batchsize).cache().prefetch(AUTOTUNE)
-    train_base = train_raw.map(parse_tfrecord, num_parallel_calls=AUTOTUNE)
-    return train_base, val_ds, int(is_train.numpy().sum())
-
-
-def make_epoch_dataset(train_base, batchsize, seed, shuffle_buffer=5000):
-    return train_base.shuffle(shuffle_buffer, seed=seed).batch(batchsize, drop_remainder=True).prefetch(AUTOTUNE)
-
-
-def make_test_dataset(path, batchsize):
-    return tf.data.TFRecordDataset(path).map(parse_tfrecord, num_parallel_calls=AUTOTUNE).batch(batchsize).prefetch(AUTOTUNE)
-
-
-# =========================================================
 # Losses
 # =========================================================
 def kl_divergence(mean, std, eps=1e-8):
@@ -160,6 +104,12 @@ def compute_loss(model, x, beta):
     kl_raw = kl_divergence(mean, tf.exp(0.5 * logvar))
     total = reconstruction + tf.cast(beta, tf.float32) * kl_raw
     return tf.reduce_mean(total), tf.reduce_mean(reconstruction), kl_raw
+    # sse = tf.reduce_sum(tf.square(x - x_pred), axis=[1, 2, 3, 4])
+    # l1 = tf.reduce_sum(tf.abs(x - x_pred), axis=[1, 2, 3, 4])
+    # kl_raw = kl_divergence(mean, tf.exp(0.5 * logvar))
+    # total = l1 + tf.cast(beta, tf.float32) * kl_raw
+    # return tf.reduce_mean(total), tf.reduce_mean(sse), kl_raw
+    
 
 
 # =========================================================
@@ -215,7 +165,7 @@ def evaluate(model, ds, beta):
     return loss / steps, mse / steps, kl / steps
 
 
-def train(vae, train_base, val_ds, steps_per_epoch, args, log_dir):
+def train(vae, is_train, val_ds, steps_per_epoch, args, log_dir):
     """Runs the epoch loop. Returns the beta variable (holding the final beta)."""
     total_steps = steps_per_epoch * args.epochs
     beta_var = tf.Variable(0.0, dtype=tf.float32, trainable=False)
@@ -229,7 +179,7 @@ def train(vae, train_base, val_ds, steps_per_epoch, args, log_dir):
     with open(os.path.join(log_dir, "log.txt"), "w") as log_file:
         for epoch in range(args.epochs):
             print(f"\nEpoch {epoch + 1}/{args.epochs}")
-            train_ds_epoch = make_epoch_dataset(train_base, args.batchsize, seed=SEED + epoch)
+            train_ds_epoch = make_train_dataset(args.train_datapath, is_train, args.batchsize, seed=SEED + epoch)
 
             epoch_losses, epoch_mses, epoch_kls = [], [], []
             for step, x_batch in enumerate(train_ds_epoch):
@@ -258,8 +208,10 @@ def train(vae, train_base, val_ds, steps_per_epoch, args, log_dir):
             log_file.flush()
             os.fsync(log_file.fileno())
 
-            vae.save_weights(os.path.join(log_dir, f"vae_epoch_{epoch + 1}.weights.h5"))
-            if val_mse < best_val - args.min_improvement:
+            if args.save_every_epoch:
+                vae.save_weights(os.path.join(log_dir, f"vae_epoch_{epoch + 1}.weights.h5"))
+
+            if val_mse < best_val * (1 - args.min_improvement):
                 best_val = val_mse
                 epochs_without_improvement = 0
                 vae.save_weights(best_path)
@@ -278,7 +230,6 @@ def train(vae, train_base, val_ds, steps_per_epoch, args, log_dir):
 def save_models(vae, log_dir):
     vae.encoder.save(os.path.join(log_dir, "encoder_model.keras"))
     vae.decoder.save(os.path.join(log_dir, "decoder_model.keras"))
-    # vae.save_weights(os.path.join(log_dir, "vae_final.weights.h5"))
     print(f"Models saved in {log_dir}")
 
 
@@ -301,12 +252,13 @@ if __name__ == "__main__":
 
     vae = build_vae(args.z_dim, target_sum)
     num_samples = count_records(args.train_datapath)
-    train_base, val_ds, num_train = make_train_val_datasets(args.train_datapath, num_samples, args.batchsize)
-    steps_per_epoch = num_train // args.batchsize
+
+    is_train, is_val = split_train_val(num_samples)
+    val_ds = make_val_dataset(args.train_datapath, is_val, args.batchsize)
+    steps_per_epoch = int(is_train.sum()) // args.batchsize
 
     log_dir = make_log_dir(args)
-    os.makedirs(log_dir, exist_ok=True)
-    beta_var = train(vae, train_base, val_ds, steps_per_epoch, args, log_dir)
+    beta_var = train(vae, is_train, val_ds, steps_per_epoch, args, log_dir)
     print("Final test evaluation...")
     test_ds = make_test_dataset(args.test_datapath, args.batchsize)
     test_loss, test_mse, test_kl = evaluate(vae, test_ds, beta_var)

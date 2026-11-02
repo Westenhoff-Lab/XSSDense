@@ -4,7 +4,6 @@ Shared model definitions and data loading (train / validation / test) for the be
 
 import tensorflow as tf
 import numpy as np
-from scipy.ndimage import binary_dilation
 
 AUTOTUNE = tf.data.AUTOTUNE
 GRID_SIZE = 52
@@ -31,29 +30,38 @@ class ElectronConservation(tf.keras.layers.Layer):
         return cfg
 
 
+def conv_block(x, filters, n):
+    """n convolutions at the current resolution."""
+    for _ in range(n):
+        x = tf.keras.layers.Conv3D(filters, 3, padding="same", kernel_initializer="he_normal")(x)
+        x = tf.keras.layers.LeakyReLU()(x)
+    return x
+
+
 def build_encoder(z_dim):
-    conv = dict(padding="same", activation="relu", kernel_initializer="he_normal")
     inputs = tf.keras.Input(shape=INPUT_SHAPE)
-    x = tf.keras.layers.Conv3D(64, 3, **conv)(inputs)
-    x = tf.keras.layers.Conv3D(64, 3, **conv)(x)
+    x = conv_block(inputs, 16, 2)
     x = tf.keras.layers.MaxPool3D(2)(x)
-    x = tf.keras.layers.Conv3D(128, 3, **conv)(x)
-    x = tf.keras.layers.Conv3D(128, 3, **conv)(x)
+    x = conv_block(x, 32, 2)
     x = tf.keras.layers.MaxPool3D(2)(x)
-    x = tf.keras.layers.Conv3D(128, 3, **conv)(x)
-    x = tf.keras.layers.Conv3D(128, 3, **conv)(x)
+    x = conv_block(x, 64, 2)
+    x = tf.keras.layers.Conv3D(16, 1, kernel_initializer="he_normal")(x)  # 64 -> 16 channels
+    x = tf.keras.layers.LeakyReLU()(x)
     x = tf.keras.layers.Flatten()(x)
     z = tf.keras.layers.Dense(z_dim * 2, activation=None, dtype="float32")(x)  # mean and logvar
     return tf.keras.Model(inputs, z, name="encoder")
 
 
 def build_decoder(z_dim, target_sum):
-    conv = dict(padding="same", activation="relu", kernel_initializer="he_normal")
     latent_inputs = tf.keras.Input(shape=(z_dim,))
-    x = tf.keras.layers.Dense(LATENT_GRID**3 * 32, activation="relu", kernel_initializer="he_normal")(latent_inputs)
-    x = tf.keras.layers.Reshape((LATENT_GRID, LATENT_GRID, LATENT_GRID, 32))(x)
-    x = tf.keras.layers.Conv3DTranspose(64, 5, strides=2, **conv)(x)
-    x = tf.keras.layers.Conv3DTranspose(128, 5, strides=2, **conv)(x)
+    x = tf.keras.layers.Dense(LATENT_GRID**3 * 16, activation="relu", kernel_initializer="he_normal")(latent_inputs)
+    x = tf.keras.layers.Reshape((LATENT_GRID, LATENT_GRID, LATENT_GRID, 16))(x)
+    x = tf.keras.layers.Conv3D(64, 1, activation="relu", kernel_initializer="he_normal")(x)  # 16 -> 64 channels
+    x = conv_block(x, 64, 2)
+    x = tf.keras.layers.UpSampling3D(2)(x)
+    x = conv_block(x, 32, 2)
+    x = tf.keras.layers.UpSampling3D(2)(x)
+    x = conv_block(x, 16, 2)
     rho = tf.keras.layers.Conv3D(1, 3, padding="same", activation="softplus", dtype="float32")(x)
     outputs = ElectronConservation(target_sum, dtype="float32")(rho)
     return tf.keras.Model(latent_inputs, outputs, name="decoder")
@@ -124,6 +132,8 @@ def count_records(path):
 def split_train_val(num_samples, block=100, val_every=10):
     """Masks for the records of train.tfrecords: (is_train, is_val).
     Every `val_every`-th block of `block` records is validation, the rest is training.
+    This is not necessary for data produced with AFsample2 but
+    it is good for MD where neighbouring frames are correlated.
     """
     pos = np.arange(num_samples)
     is_val = (pos // block) % val_every == 0

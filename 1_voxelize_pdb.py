@@ -172,6 +172,8 @@ def parse_arguments():
     parser.add_argument("--selection", help="Selection inside the PDB file", default="protein and not element H", type=str)
     args = parser.parse_args()
     psf, dcd = interpret_user_input(args, parser)
+    for key, value in vars(args).items():
+        print(f"{key}: {value}")
     return psf, dcd, args.selection, args.system, args.bbmax, args.n_voxels, args.cutoff, args.save_path
 
 

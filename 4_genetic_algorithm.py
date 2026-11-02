@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from density_manipulation import create_ccp4_map_
-from helper.scattering import scattering_curve_gpu
+from helper.scattering import scattering_curve_gpu, envelope_voxels
 from helper.VAE import load_vae
 
 
@@ -58,13 +58,13 @@ def r_squared(I_model, I_data):
     return 1 - res / tot
 
 
-def model_curve(density, dv, q_data, rho_bulk, drho, shell, padding):
+def model_curve(density, dv, q_data, rho_bulk, drho, shell, padding, k):
     """Scattering curve of `density`, interpolated onto the data's q-values (NumPy)."""
-    q, I = scattering_curve_gpu(density, dv, rho_bulk, drho, shell, padding, qmax=None)
+    q, I = scattering_curve_gpu(density, dv, rho_bulk, drho, shell, padding, qmax=None, k=k)
     return np.interp(q_data, cp.asnumpy(q), cp.asnumpy(I))
 
 
-def fit_dark_state(dark, dv, q_data, I_data, rho_bulk, padding, shells=(1.0, 2.0, 3.0, 4.0, 5.0), drho_percents=range(13)):
+def fit_dark_state(dark, dv, q_data, I_data, rho_bulk, padding, k, shells=(1.0, 2.0, 3.0, 4.0, 5.0), drho_percents=range(13)):
     """Scan shell thickness and contrast; for each, fit the absolute scale. Keep the best by r²."""
     if rho_bulk == 0:  # vacuum: no solvent parameters to fit
         shells, drho_percents = (0.0,), (0,)
@@ -73,11 +73,11 @@ def fit_dark_state(dark, dv, q_data, I_data, rho_bulk, padding, shells=(1.0, 2.0
     for shell in shells:
         for pct in drho_percents:
             drho = pct * 0.01 * rho_bulk
-            I_model = model_curve(dark, dv, q_data, rho_bulk, drho, shell, padding)
+            I_model = model_curve(dark, dv, q_data, rho_bulk, drho, shell, padding, k)
             scale = fit_scale(I_model, I_data)
             r2 = r_squared(scale * I_model, I_data)
             if best is None or r2 > best["r2"]:
-                best = {"scale": scale, "drho": drho, "shell": shell, "r2": r2}
+                best = {"scale": scale, "drho": drho, "shell": shell, "r2": r2, "k": k}
     return best
 
 
@@ -92,7 +92,7 @@ def decode(vae, Z, xmin, xmax):
 
 def candidate_dI(density, dark_fit, q_data, dv, rho_bulk, padding):
     """Model ΔI of one density for a yield of 1, using the dark state's solvent parameters."""
-    I_light = model_curve(density, dv, q_data, rho_bulk, dark_fit["drho"], dark_fit["shell"], padding)
+    I_light = model_curve(density, dv, q_data, rho_bulk, dark_fit["drho"], dark_fit["shell"], padding, dark_fit["k"])
     return dark_fit["scale"] * (I_light - dark_fit["I_dark"])
 
 
@@ -218,27 +218,33 @@ def save_results(out, Z, scores, yields, r2s, densities, dark_fit, q_data, dI_da
 # Main
 # =========================================================
 def parse_arguments():
-    p = argparse.ArgumentParser(description="GA reconstruction of a light-state density from ΔI(q).")
-    p.add_argument("--model_path", required=True, help="Trained model directory (.vae), with latent_stats.txt")
-    p.add_argument("--meta", required=True, help="meta.json of the training data (normalization min/max)")
-    p.add_argument("--h5", required=True, help=".h5 with 'rho' (raw densities) and 'dv' (voxel size)")
-    p.add_argument("--dark_index", type=int, default=0, help="Frame used as the dark state (default: 0)")
-    p.add_argument("--dark_curve", required=True, help="Dark-state scattering, CSV (q, I)")
-    p.add_argument("--dI_curve", required=True, help="Measured ΔI, CSV (q, ΔI)")
-    p.add_argument("--output_folder", required=True)
-    p.add_argument("--rho_bulk", type=float, default=0.334, help="Bulk solvent density in e/Å³; 0 for vacuum (default: 0.334)")
-    p.add_argument("--target_yield", type=float, default=0.5, help="Expected photoactivation yield (default: 0.5)")
-    p.add_argument("--yield_weight", type=float, default=2.0, help="Weight of the yield penalty (default: 2)")
-    p.add_argument("--qmax", type=float, default=0.6, help="Largest q used in the fit (default: 0.6)")
-    p.add_argument("--padding", type=int, default=3, help="FFT padding factor, must match the data generation (default: 3)")
-    p.add_argument("--pop_size", type=int, default=64)
-    p.add_argument("--generations", type=int, default=80)
-    p.add_argument("--n_elite", type=int, default=4, help="Best candidates copied unchanged (default: 4)")
-    p.add_argument("--n_random", type=int, default=6, help="Random newcomers per generation (default: 6)")
-    p.add_argument("--mutation_rate", type=float, default=0.3)
-    p.add_argument("--top_k", type=int, default=5, help="Number of distinct candidates to save (default: 5)")
-    p.add_argument("--seed", type=int, default=0)
-    return p.parse_args()
+    parser = argparse.ArgumentParser(description="GA reconstruction of a light-state density from ΔI(q).")
+    parser.add_argument("--model_path", required=True, help="Trained model directory (.vae), with latent_stats.txt")
+    parser.add_argument("--meta", required=True, help="meta.json of the training data (normalization min/max)")
+    parser.add_argument("--h5", required=True, help=".h5 with 'rho' (raw densities) and 'dv' (voxel size)")
+    parser.add_argument("--dark_index", type=int, default=0, help="Frame used as the dark state (default: 0)")
+    parser.add_argument("--dark_curve", required=True, help="Dark-state scattering, CSV (q, I)")
+    parser.add_argument("--dI_curve", required=True, help="Measured ΔI, CSV (q, ΔI)")
+    parser.add_argument("--output_folder", required=True)
+    parser.add_argument("--rho_bulk", type=float, default=0.334, help="Bulk solvent density in e/Å^3; 0 for vacuum (default: 0.334)")
+    parser.add_argument("--target_yield", type=float, default=0.5, help="Expected photoactivation yield (default: 0.5)")
+    parser.add_argument("--yield_weight", type=float, default=2.0, help="Weight of the yield penalty (default: 2)")
+    parser.add_argument("--qmax", type=float, default=0.6, help="Largest q used in the fit (default: 0.6)")
+    parser.add_argument("--padding", type=int, default=3, help="FFT padding factor, must match the data generation (default: 3)")
+    parser.add_argument("--pop_size", type=int, default=64)
+    parser.add_argument("--generations", type=int, default=80)
+    parser.add_argument("--n_elite", type=int, default=5, help="Best candidates copied unchanged (default: 5)")
+    parser.add_argument("--n_random", type=int, default=20, help="Random newcomers per generation (default: 20)")
+    parser.add_argument("--mutation_rate", type=float, default=0.3)
+    parser.add_argument("--top_k", type=int, default=5, help="Number of distinct candidates to save (default: 5)")
+    # no hydrogens -> 2.6 (1.21 Å^3/Da divided by 0.467 electrons/Da)
+    # with hydrogens -> 2.26 (1.21 Å^3/Da divided by 0.535 electrons/Da)
+    parser.add_argument("--volume_per_electron", type=float, default=2.6, help="Protein volume per electron in Å^3, sets the solvent envelope size (default: 2.6)")
+    parser.add_argument("--seed", type=int, default=0)
+    args = parser.parse_args()
+    for key, value in vars(args).items():
+        print(f"{key}: {value}")
+    return args
 
 
 def main():
@@ -254,6 +260,10 @@ def main():
         dark = f["rho"][args.dark_index].astype(np.float32)
         dv = float(f["dv"][()])
 
+    n_electrons = float(dark.sum()) * dv**3
+    k = envelope_voxels(n_electrons, dv, volume_per_electron=args.volume_per_electron)
+    print(f"Envelope: {k} voxels ({k * dv**3:.0f} Å³) for {n_electrons:.0f} electrons")
+
     q_dark, I_dark_data = load_curve(args.dark_curve)
     q_d, dI_data = load_curve(args.dI_curve)
     sel = q_d <= args.qmax
@@ -264,8 +274,8 @@ def main():
     vae = load_vae(args.model_path)
 
     # 1. Dark state: fit on the dark curve, then evaluate on the ΔI q-grid
-    dark_fit = fit_dark_state(dark, dv, q_dark, I_dark_data, args.rho_bulk, args.padding)
-    dark_fit["I_dark"] = model_curve(dark, dv, q_d, args.rho_bulk, dark_fit["drho"], dark_fit["shell"], args.padding)
+    dark_fit = fit_dark_state(dark, dv, q_dark, I_dark_data, args.rho_bulk, args.padding, k)
+    dark_fit["I_dark"] = model_curve(dark, dv, q_d, args.rho_bulk, dark_fit["drho"], dark_fit["shell"], args.padding, k)
     print(f"Dark fit: scale {dark_fit['scale']:.4f}, drho {dark_fit['drho']:.4f}, " f"shell {dark_fit['shell']:.1f} Å, r2 {dark_fit['r2']:.5f}")
     create_ccp4_map_(dark, os.path.join(args.output_folder, "dark_state.ccp4"), voxel_size=dv)
 

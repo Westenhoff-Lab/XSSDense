@@ -1,7 +1,7 @@
 """
 Train a beta-VAE on voxelized electron densities stored as TFRecords
 Usage:
-    python 3_train_VAE.py
+    python 3_train_VAE.py \
     --datapath "data/1crn_41bb_1d61dv_5co.tfrecord" \
     --savepath "data" \
     --epochs=30 \
@@ -20,7 +20,7 @@ import numpy
 import tensorflow as tf
 from pathlib import Path
 
-from helper.VAE import build_vae, count_records, split_train_val, make_train_dataset, make_val_dataset, make_test_dataset
+from helper.VAE import build_vae, count_records, split_train_val, make_train_dataset, make_val_dataset, make_test_dataset, _select
 
 # =========================================================
 # Constants
@@ -71,8 +71,8 @@ def parse_arguments():
     parser.add_argument("--epochs", type=int, default=80, help="Number of training epochs (default: 80)")
     parser.add_argument("--batchsize", type=int, default=64, help="Batch size (default: 64)")
     parser.add_argument("--patience", type=int, default=5, help="Stop after this many epochs without improvement in validation MSE (default: 5)")
-    parser.add_argument("--min_improvement", type=float, default=0.01, help="Relative drop in the ValMSE that counts as improvement")
-    parser.add_argument("--save_every_epoch", type=bool, default=False, help="Saves weights from every epoch (default: False)")
+    parser.add_argument("--min_improvement", type=float, default=0.005, help="Relative drop in the ValMSE that counts as improvement (default: 0.005)")
+    parser.add_argument("--save_every_epoch", type=bool, default=False, action="store_true", help="Saves weights from every epoch (default: False)")
     args = parser.parse_args()
 
     explicit = [args.train_datapath, args.test_datapath, args.meta_datapath]
@@ -85,6 +85,9 @@ def parse_arguments():
         args.meta_datapath = os.path.join(args.datapath, "meta", "meta.json")
     elif not all(explicit):
         parser.error(usage_error)
+
+    for key, value in vars(args).items():
+        print(f"{key}: {value}")
     return args
 
 
@@ -117,7 +120,6 @@ def compute_loss(model, x, beta):
     kl_raw = kl_divergence(mean, tf.exp(0.5 * logvar))
     total = l1 + tf.cast(beta, tf.float32) * kl_raw
     return tf.reduce_mean(total), tf.reduce_mean(sse), kl_raw
-    
 
 
 # =========================================================
@@ -241,6 +243,15 @@ def save_models(vae, log_dir):
     print(f"Models saved in {log_dir}")
 
 
+def save_latent_stats(vae, train_path, is_train, batchsize, log_dir):
+    """Latent means of the training frames and their mean/std/min/max per dimension (read by the GA)."""
+    ds = _select(train_path, is_train).batch(batchsize)
+    means = numpy.concatenate([vae.encode(x)[0].numpy() for x in ds])
+    numpy.save(os.path.join(log_dir, "latents_train.npy"), means)
+    stats = numpy.column_stack((means.mean(0), means.std(0), means.min(0), means.max(0)))
+    numpy.savetxt(os.path.join(log_dir, "latent_stats.txt"), stats, header="mean std min max")
+
+
 def make_log_dir(args):
     """<savepath>/X.vae, where X is the --datapath directory name or the training file name."""
     src = Path(args.datapath) if args.datapath else Path(args.train_datapath)
@@ -272,3 +283,4 @@ if __name__ == "__main__":
     test_loss, test_mse, test_kl = evaluate(vae, test_ds, beta_var)
     print(f"Final test: Loss={test_loss:.5f}, MSE={test_mse:.5f}, KL={test_kl:.5f}")
     save_models(vae, log_dir)
+    save_latent_stats(vae, args.train_datapath, is_train, args.batchsize, log_dir)

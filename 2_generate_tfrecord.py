@@ -1,26 +1,34 @@
 """
-Saves voxel density as TFRecord with global min-max normalization [0, 1]
+Save voxel densities as TFRecords with global min-max normalization to [0, 1].
 Usage:
     python 2_generate_tfrecord.py \
-    --voxels_dir "data/1crn_41bb_1d61dv_5co.h5" \
-    --output_dir "data/1crn_41bb_1d61dv_5co.tfrecord"
+        --rho_dir "data/1crn_41bb_1d61dv_5co.h5" \
+        --output_dir "data/1crn_41bb_1d61dv_5co.tfrecord"
 """
 
-import os
+import argparse
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor
+
+import h5py
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor
-import h5py
-import argparse
 
 
-# ─────────────────────────────────────────────
+# =========================================================
 # TFRecord helpers
-# ─────────────────────────────────────────────
+# =========================================================
 def serialize_example(flat_array, index):
-    return tf.train.Example(features=tf.train.Features(feature={"data": tf.train.Feature(float_list=tf.train.FloatList(value=flat_array)), "index": tf.train.Feature(int64_list=tf.train.Int64List(value=[index]))})).SerializeToString()
+    return tf.train.Example(
+        features=tf.train.Features(
+            feature={
+                "data": tf.train.Feature(float_list=tf.train.FloatList(value=flat_array)),
+                "index": tf.train.Feature(int64_list=tf.train.Int64List(value=[index])),
+            }
+        )
+    ).SerializeToString()
 
 
 def serialize_frame(args):
@@ -33,116 +41,137 @@ def frame_jobs(voxels):
         yield idx, voxels[idx].reshape(-1)
 
 
+def serialize_all(voxels, num_proc):
+    """Serialized examples of all frames, in frame order."""
+    with ProcessPoolExecutor(max_workers=num_proc) as executor:
+        results = list(tqdm(executor.map(serialize_frame, frame_jobs(voxels), chunksize=16), total=len(voxels), desc="Serializing"))
+    return [ex for _, ex in results]
+
+
 def write_tfrecord(filename, examples):
     with tf.io.TFRecordWriter(filename) as writer:
         for ex in tqdm(examples, desc=f"Writing {os.path.basename(filename)}"):
             writer.write(ex)
 
 
+# =========================================================
+# Data steps
+# =========================================================
+def load_rho(path):
+    with h5py.File(path, "r") as f:
+        rho = f["rho"][()]
+        dv = float(f["dv"][()])
+    print(f"Loaded {rho.shape[0]} frames of {rho.shape[1:]}, voxel size {dv:.4f} Å")
+    return rho, dv
+
+
+def electron_count(rho, dv):
+    """Mean and std of the electron count per frame.
+    Warn if it varies by more than 1%."""
+    n = rho.sum(axis=tuple(range(1, rho.ndim)), dtype=np.float64) * dv**3
+    mean, std = n.mean(), n.std()
+    print(f"Electrons per frame: mean {mean:.6g}, rel. std {std / mean:.2%}")
+    if std / mean > 0.01:
+        print("WARNING: electron count varies >1% (not constant, or density clipped at the box edge)")
+    return float(mean), float(std)
+
+
+def normalize(rho):
+    """Global min-max normalization to [0, 1]. Returns (rho_norm, min, max)."""
+    x_min, x_max = float(rho.min()), float(rho.max())
+    if x_max <= x_min:
+        raise RuntimeError(f"Invalid normalization range: min={x_min}, max={x_max}")
+    rho_norm = ((rho - x_min) / (x_max - x_min)).astype(np.float32)
+    print(f"Normalization: min {x_min:.6g}, max {x_max:.6g}")
+    return rho_norm, x_min, x_max
+
+
+def split_blocks(n_frames, block, test_every):
+    """Every `test_every`-th block of `block` consecutive frames is test, the rest is training.
+    Not needed for independent structures (e.g. AFsample2), but important for MD,
+    where neighbouring frames are correlated."""
+    pos = np.arange(n_frames)
+    is_test = (pos // block) % test_every == 0
+    is_train = ~is_test
+    print(f"Split: {is_train.sum()} train, {is_test.sum()} test")
+    return is_train, is_test
+
+
+def save_test_rho(path, rho_test, test_indices, dv):
+    """rho test frames with their trajectory indices, for synthetic data and comparisons."""
+    with h5py.File(path, "w") as f:
+        f["rho"] = rho_test
+        f["index"] = test_indices
+        f["dv"] = dv
+
+
+# =========================================================
+# Main
+# =========================================================
 def parse_arguments():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--voxels_dir", help="Directory containing voxel .h5 files", required=True)
-    parser.add_argument("--output_dir", help="Directory to save TFRecords and metadata", required=True)
-    parser.add_argument("--grid_size", help="Size of the voxel grid", default=52, type=int)
-    parser.add_argument("--train_split_mod", help="Modulo for train/test split (every Nth sample goes to test)", default=10, type=int)
-    parser.add_argument("--num_proc", help="Number of processes for parallel processing", default=8, type=int)
-    return parser.parse_args()
+    parser = argparse.ArgumentParser(description="Save voxel densities as normalized TFRecords with a block split")
+    parser.add_argument("--h5", required=True, help=".h5 with datasets 'rho' and 'dv'")
+    parser.add_argument("--output_dir", required=True, help="Directory for the TFRecords and metadata")
+    parser.add_argument("--block", type=int, default=100, help="Frames per block (default: 100)")
+    parser.add_argument("--test_every", type=int, default=10, help="Every n-th block is test (default: 10, i.e. 10%%)")
+    parser.add_argument("--num_proc", type=int, default=8, help="Processes for serialization (default: 8)")
+    args = parser.parse_args()
+    for key, value in vars(args).items():
+        print(f"{key}: {value}")
+    return args
 
 
-# ─────────────────────────────────────────────
-# Main workflow
-# ─────────────────────────────────────────────
-def run_workflow(voxels_dir, output_dir, grid_size, train_split_mod, num_proc):
-    output_dir = os.path.abspath(output_dir)
+def main():
+    args = parse_arguments()
+    output_dir = os.path.abspath(args.output_dir)
     tf_out = os.path.join(output_dir, "tfrecords")
     meta_out = os.path.join(output_dir, "meta")
     os.makedirs(tf_out, exist_ok=True)
     os.makedirs(meta_out, exist_ok=True)
-    # ------------------------------------------------
-    # Load voxel files
-    # ------------------------------------------------
-    with h5py.File(voxels_dir, "r") as voxels_file:
-        print(f"Loaded {voxels_file['rho'].shape[0]} samples")
-        raw = voxels_file["rho"][()]
-        dv = voxels_file["dv"][()]
 
-    n_electrons_per_sample = np.sum(raw, axis=tuple(range(1, raw.ndim))) * dv**3
-    n_electrons = np.mean(n_electrons_per_sample)
-    n_electrons_std = np.std(n_electrons_per_sample)
-    rel_spread = n_electrons_std / n_electrons
-    print(f"num electrons: mean={n_electrons:.6g}, rel. std={rel_spread:.2%}")
-    if rel_spread > 0.01:
-        print("WARNING: sums vary >1% — electron count may not be constant, or density is clipped at the box edge")
-    # ------------------------------------------------
-    # Global min-max normalization to [0, 1]
-    # ------------------------------------------------
-    X_MIN = raw.min()
-    X_MAX = raw.max()
+    rho, dv = load_rho(args.h5)
+    grid_size = rho.shape[1]
+    n_electrons, n_electrons_std = electron_count(rho, dv)
 
-    if X_MAX <= X_MIN:
-        raise RuntimeError(f"Invalid normalization range: min={X_MIN}, max={X_MAX}")
+    is_train, is_test = split_blocks(len(rho), args.block, args.test_every)
+    train_indices, test_indices = np.flatnonzero(is_train), np.flatnonzero(is_test)
+    save_test_rho(os.path.join(tf_out, "test_rho.h5"), rho[is_test].astype(np.float32), test_indices, dv)
 
-    voxels = raw.astype(np.float32)
-    voxels = (voxels - X_MIN) / (X_MAX - X_MIN)
+    rho_norm, x_min, x_max = normalize(rho)
+    del rho  # free memory
+    target_sum = float(rho_norm.sum(axis=tuple(range(1, rho_norm.ndim)), dtype=np.float64).mean())
 
-    sample_sums = np.sum(voxels, axis=tuple(range(1, voxels.ndim)))
-    target_sum = float(sample_sums.mean())
-    del raw  # free memory
+    examples = serialize_all(rho_norm, args.num_proc)
+    write_tfrecord(os.path.join(tf_out, "train.tfrecords"), [examples[i] for i in train_indices])
+    write_tfrecord(os.path.join(tf_out, "test.tfrecords"), [examples[i] for i in test_indices])
 
-    # Sanity check
-    print(f"Normalization:")
-    print(f"  global min = {X_MIN:.6g}")
-    print(f"  global max = {X_MAX:.6g}")
-    print(f"  after norm → min={voxels.min():.3f}, max={voxels.max():.3f}, density sum: {target_sum:.3f}")
-    # ------------------------------------------------
-    # Serialize to TFRecords
-    # ------------------------------------------------
-    examples_train = []
-    examples_test = []
-
-    with ProcessPoolExecutor(max_workers=num_proc) as executor:
-        results = list(tqdm(executor.map(serialize_frame, frame_jobs(voxels), chunksize=16), total=len(voxels), desc="Serializing"))
-
-    for idx, ex in results:
-        if idx % train_split_mod == 0:
-            examples_test.append(ex)
-        else:
-            examples_train.append(ex)
-
-    write_tfrecord(os.path.join(tf_out, "train.tfrecords"), examples_train)
-    write_tfrecord(os.path.join(tf_out, "test.tfrecords"), examples_test)
-    # ------------------------------------------------
-    # Metadata
-    # ------------------------------------------------
     meta = {
         "grid_size": grid_size,
-        "voxel_shape": [grid_size, grid_size, grid_size],
-        "voxel_count": len(voxels),
-        "train_samples": len(examples_train),
-        "test_samples": len(examples_test),
+        "voxel_shape": [grid_size] * 3,
+        "voxel_size": dv,
+        "voxel_count": len(rho_norm),
+        "train_samples": len(train_indices),
+        "test_samples": len(test_indices),
+        "split": {"type": "blocks", "block": args.block, "test_every": args.test_every},
+        "train_indices": [int(i) for i in train_indices],
+        "test_indices": [int(i) for i in test_indices],
         "normalized": True,
-        "normalization": {
-            "type": "minmax",
-            "min": float(X_MIN),
-            "max": float(X_MAX),
-        },
+        "normalization": {"type": "minmax", "min": x_min, "max": x_max},
         "electron_conservation": {
-            "n_electrons": float(n_electrons),
-            "target_sum_normalized": float(target_sum),
-            "n_electrons_std": float(n_electrons_std),
+            "n_electrons": n_electrons,
+            "n_electrons_std": n_electrons_std,
+            "target_sum_normalized": target_sum,
         },
-        "source_dir": voxels_dir,
+        "source_dir": args.h5,
     }
-
     with open(os.path.join(meta_out, "meta.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
     print("TFRecord generation complete")
-    print(f"  Train TFRecord: {os.path.join(tf_out, 'train.tfrecords')}")
-    print(f"  Test TFRecord : {os.path.join(tf_out, 'test.tfrecords')}")
-    print(f"  Meta          : {os.path.join(meta_out, 'meta.json')}")
+    for name in ("train.tfrecords", "test.tfrecords", "test_rho.h5"):
+        print(f"  {os.path.join(tf_out, name)}")
+    print(f"  {os.path.join(meta_out, 'meta.json')}")
 
 
 if __name__ == "__main__":
-    args = parse_arguments()
-    run_workflow(args.voxels_dir, args.output_dir, args.grid_size, args.train_split_mod, args.num_proc)
+    main()

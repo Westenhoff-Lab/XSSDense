@@ -17,33 +17,40 @@ import numpy
 from matplotlib import pyplot
 from sklearn import decomposition, cluster
 
-from scattering import scattering_curve_gpu
+from scattering import scattering_curve_gpu, envelope_voxels
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="XSS analysis: scattering curves, PCA/KMeans clustering and synthetic data.")
-    p.add_argument("--h5", required=True, help="Input HDF5 file containing 'rho' and 'dv'.")
-    p.add_argument("--out_dir", default="data", help="Output folder for figures, .h5 files and synthetic_class<N>_<vacuum|solvent>/ folders.")
-    p.add_argument("--padding", type=int, default=3, help="FFT padding factor, must match the GA (default: 3)")
-    p.add_argument("--n_pca", type=int, default=2, help="Number of PCA components used for clustering.")
-    p.add_argument("--n_clusters", type=int, default=2, help="Number of KMeans clusters used for classification.")
-    p.add_argument("--dark_index", type=int, default=0, help="Frame index used as the dark (ground) state.")
-    p.add_argument("--rho_bulk", type=float, default=0.334, help="Bulk solvent density in e/Å³; 0 for vacuum (default: 0.334)")
-    p.add_argument("--drho", type=float, default=None, help="Hydration shell contrast in e/Å³ (required if rho_bulk > 0)")
-    p.add_argument("--shell", type=float, default=None, help="Hydration shell thickness in Å (required if rho_bulk > 0)")
-    p.add_argument("--target_yield", dest="pa_yield", type=float, default=1.0, help="Photoactivation yield written to truth.json.")
-    p.add_argument("--fig_dir", default=None, help="Folder for the plots (default: <out_dir>/figures)")
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(description="XSS analysis: scattering curves, PCA/KMeans clustering and synthetic data.")
+    parser.add_argument("--h5", required=True, help="Input HDF5 file containing 'rho' and 'dv'.")
+    parser.add_argument("--out_dir", default="data", help="Output folder for figures, .h5 files and synthetic_class<N>_<vacuum|solvent>/ folders.")
+    parser.add_argument("--padding", type=int, default=3, help="FFT padding factor, must match the GA (default: 3)")
+    parser.add_argument("--n_pca", type=int, default=2, help="Number of PCA components used for clustering.")
+    parser.add_argument("--n_clusters", type=int, default=2, help="Number of KMeans clusters used for classification.")
+    parser.add_argument("--dark_index", type=int, default=0, help="Frame index used as the dark (ground) state.")
+    parser.add_argument("--rho_bulk", type=float, default=0.334, help="Bulk solvent density in e/Å³; 0 for vacuum (default: 0.334)")
+    parser.add_argument("--drho", type=float, default=None, help="Hydration shell contrast in e/Å³ (required if rho_bulk > 0)")
+    parser.add_argument("--shell", type=float, default=None, help="Hydration shell thickness in Å (required if rho_bulk > 0)")
+    parser.add_argument("--target_yield", dest="pa_yield", type=float, default=1.0, help="Photoactivation yield written to truth.json.")
+    parser.add_argument("--fig_dir", default=None, help="Folder for the plots (default: <out_dir>/figures)")
+    parser.add_argument("--meta", required=True, help="meta.json from the converter (contains test_indices)")
+    # no hydrogens -> 2.6 (1.21 Å^3/Da divided by 0.467 electrons/Da)
+    # with hydrogens -> 2.26 (1.21 Å^3/Da divided by 0.535 electrons/Da)
+    parser.add_argument("--volume_per_electron", type=float, default=2.6, help="Protein volume per electron in Å^3, sets the solvent envelope size (default: 2.6)")
+    args = parser.parse_args()
 
     if args.rho_bulk == 0:
         if args.drho or args.shell:
-            p.error("--drho and --shell have no effect in vacuum (--rho_bulk 0); leave them out")
+            parser.error("--drho and --shell have no effect in vacuum (--rho_bulk 0); leave them out")
         args.drho, args.shell = 0.0, 0.0
     elif args.drho is None or args.shell is None:
-        p.error("--drho and --shell are required when --rho_bulk > 0")
+        parser.error("--drho and --shell are required when --rho_bulk > 0")
 
     if args.fig_dir is None:
         args.fig_dir = os.path.join(args.out_dir, "figures")
+
+    for key, value in vars(args).items():
+        print(f"{key}: {value}")
     return args
 
 
@@ -70,21 +77,31 @@ def save_fig(fig, out_dir, name):
     print("saved", path)
 
 
+def load_test_mask(meta_path, n_frames):
+    """Boolean mask over all frames: True for the frames in the test set."""
+    with open(meta_path) as f:
+        test_indices = json.load(f)["test_indices"]
+    mask = numpy.zeros(n_frames, dtype=bool)
+    mask[test_indices] = True
+    print(f"{mask.sum()} of {n_frames} frames are test frames")
+    return mask
+
+
 # =========================================================
 # Scattering
 # =========================================================
-def scattering_curve(density, dv, args):
+def scattering_curve(density, dv, args, k):
     """Full-q-range I(q) of one density with the solvent model, as NumPy arrays."""
-    q, I = scattering_curve_gpu(density, dv, args.rho_bulk, args.drho, args.shell, args.padding, qmax=None)
+    q, I = scattering_curve_gpu(density, dv, args.rho_bulk, args.drho, args.shell, args.padding, qmax=None, k=k)
     return q.get(), I.get()
 
 
-def compute_scattering(rho, dv, args):
+def compute_scattering(rho, dv, args, k):
     qs, curves = None, []
     for i in range(rho.shape[0]):
         if (i + 1) % 50 == 0:
             print("frame %d/%d" % (i + 1, rho.shape[0]), end="\r")
-        q, I = scattering_curve(rho[i], dv, args)
+        q, I = scattering_curve(rho[i], dv, args, k)
         if qs is None:
             qs = q
         curves.append(I)
@@ -106,8 +123,12 @@ def cluster_curves(curves_norm, n_pca, n_clusters):
     return X, labels
 
 
-def class_mean_density(rho, labels, lid):
-    return numpy.mean(rho[labels == lid], axis=0)
+def class_mean_density(rho, labels, lid, test_mask):
+    """Mean density of the test frames in class `lid`."""
+    members = (labels == lid) & test_mask
+    if not members.any():
+        raise ValueError(f"class #{lid + 1} contains no test frames; try fewer clusters or a different split")
+    return numpy.mean(rho[members], axis=0), int(members.sum())
 
 
 # =========================================================
@@ -153,7 +174,7 @@ def plot_delta_curves(q, delta_curves, out_dir):
 # =========================================================
 # Synthetic data
 # =========================================================
-def make_truth(dv, args):
+def make_truth(dv, args, k):
     return {
         "pa_yield": args.pa_yield,
         "dark_index": args.dark_index,
@@ -162,6 +183,7 @@ def make_truth(dv, args):
         "shell": args.shell,
         "padding": args.padding,
         "voxel_size": dv,
+        "envelope_voxels": k,
     }
 
 
@@ -175,18 +197,19 @@ def save_synthetic(synth_dir, q, I_dark, delta_I, light, truth):
     print("saved", synth_dir)
 
 
-def make_synthetic_datasets(rho, dv, labels, args):
-    q, I_dark = scattering_curve(rho[args.dark_index], dv, args)
-    truth = make_truth(dv, args)
+def make_synthetic_datasets(rho, dv, labels, test_mask, args, k):
+    q, I_dark = scattering_curve(rho[args.dark_index], dv, args, k)
     tag = "vacuum" if args.rho_bulk == 0 else "solvent"
 
     delta_curves = []
     for lid in range(args.n_clusters):
-        light = class_mean_density(rho, labels, lid)
-        _, I_light = scattering_curve(light, dv, args)
-        delta_I = I_light - I_dark
+        light, n_used = class_mean_density(rho, labels, lid, test_mask)
+        _, I_light = scattering_curve(light, dv, args, k)
+        delta_I = args.pa_yield * (I_light - I_dark)
         delta_curves.append(delta_I)
 
+        truth = make_truth(dv, args, k)
+        truth.update({"class": lid + 1, "n_test_frames": n_used})
         synth_dir = os.path.join(args.out_dir, "synthetic_class%d_%s" % (lid + 1, tag))
         save_synthetic(synth_dir, q, I_dark, delta_I, light, truth)
 
@@ -203,8 +226,10 @@ def main():
     stem = os.path.splitext(os.path.basename(args.h5))[0]
 
     rho, dv = load_density(args.h5)
+    k = envelope_voxels(float(rho[args.dark_index].sum()) * dv**3, dv, args.volume_per_electron)
+    test_mask = load_test_mask(args.meta, len(rho))
 
-    qs, intensity = compute_scattering(rho, dv, args)
+    qs, intensity = compute_scattering(rho, dv, args, k)
     save_h5(os.path.join(args.out_dir, stem + "_xss.h5"), q=qs, intensity=intensity)
 
     curves_norm = normalise_curves(intensity)
@@ -214,7 +239,7 @@ def main():
     plot_normalised_curves(qs, curves_norm, args.fig_dir)
     plot_clusters(X, labels, args.n_clusters, args.fig_dir)
     plot_class_intensities(qs, intensity, labels, args.n_clusters, args.fig_dir)
-    make_synthetic_datasets(rho, dv, labels, args)
+    make_synthetic_datasets(rho, dv, labels, test_mask, args, k)
 
 
 if __name__ == "__main__":

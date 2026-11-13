@@ -879,7 +879,7 @@ if __name__ == "__main__":
         )
 
         # -------------------------
-        # EXACT SAXS curve (NEW ✅)
+        # EXACT SAXS curve
         # -------------------------
         q_model, delta_I = compute_exact_deltaI(
             voxel_light_cp=cp.asarray(extrapolated),

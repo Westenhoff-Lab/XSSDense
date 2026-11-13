@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xssdense"
+version = "0.0.1"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "h5py",
+    "matplotlib",
+    "pandas",
+    "scikit-learn",
+    "MDAnalysis",
+    "gemmi",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+gpu = ["tensorflow", "cupy-cuda12x"]
+container = ["numpy<2"]
+
+[project.scripts]
+xssdense-voxelize     = "xssdense.voxelize:main"
+xssdense-gen-tfrecord = "xssdense.generate_tfrecord:main"
+xssdense-train-vae    = "xssdense.train_vae:main"
+xssdense-ga           = "xssdense.genetic_algorithm:main"
+
+[tool.setuptools.package-data]
+xssdense = ["SuCoppens.dat"]

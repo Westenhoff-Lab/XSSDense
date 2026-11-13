@@ -1,7 +1,7 @@
 """
 From PDB ensemble or MD trajectory, computes the electron density on a 3D grid and save it to an HDF5 file
 Usage:
-    python 1_voxelize_pdb.py \
+    xssdense-voxelize \
         --topology "data/1crn.psf" \
         --trajectory "data/1crn_eq_aligned.dcd" \
         --bbmax 41 \
@@ -98,8 +98,7 @@ def compute_rho_universe(elements, centered_positions, l, dv, cutoff):
     return rho_universe
 
 
-def save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path):
-    print(f"Saving density to {save_path}...")
+def save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path, origin, selection, topology, trajectory):
     bbmax_string = f"{bbmax:g}".replace(".", "d")
     dv_string = f"{dv:g}".replace(".", "d")
     cutoff_string = f"{cutoff:g}".replace(".", "d")
@@ -109,6 +108,13 @@ def save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path):
         f.create_dataset("rho", data=rho_universe)
         f.create_dataset("dv", data=dv)
         f.create_dataset("bbmax", data=bbmax)
+        f.attrs["n_voxels"] = rho_universe.shape[1]
+        f.attrs["origin"] = float(origin)
+        f.attrs["cutoff"] = float(cutoff)
+        f.attrs["system"] = system
+        f.attrs["selection"] = selection
+        f.attrs["topology"] = str(topology)
+        f.attrs["trajectory"] = trajectory if isinstance(trajectory, str) else ";".join(trajectory)
     print("done.")
 
 
@@ -177,7 +183,7 @@ def parse_arguments():
     return psf, dcd, args.selection, args.system, args.bbmax, args.n_voxels, args.cutoff, args.save_path
 
 
-if __name__ == "__main__":
+def main():
     psf, dcd, selection, system, bbmax, n_voxels, cutoff, save_path = parse_arguments()
     u = create_universe(psf, dcd)
     elements, centered = get_centered_positions(u, selection)
@@ -186,4 +192,8 @@ if __name__ == "__main__":
     l, dv = define_grid(bbmax, n_voxels)
     print(f"bounding box: {bbmax} Å, num. of voxels: {n_voxels}, voxel size: {dv} Å")
     rho_universe = compute_rho_universe(elements, centered, l, dv, cutoff)
-    save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path)
+    save_rho_universe(rho_universe, system, bbmax, dv, cutoff, save_path, l[0], selection, psf, dcd)
+
+
+if __name__ == "__main__":
+    main()

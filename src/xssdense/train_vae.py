@@ -1,7 +1,7 @@
 """
 Train a beta-VAE on voxelized electron densities stored as TFRecords
 Usage:
-    python 3_train_VAE.py \
+    xssdense-train-vae \
     --datapath "data/1crn_41bb_1d61dv_5co.tfrecord" \
     --savepath "data" \
     --epochs=30 \
@@ -11,7 +11,7 @@ Usage:
 """
 
 import os
-from helper import redirect_tf_cpp_logs
+from xssdense import redirect_tf_cpp_logs
 
 redirect_tf_cpp_logs.redirect()
 import argparse
@@ -20,7 +20,7 @@ import numpy
 import tensorflow as tf
 from pathlib import Path
 
-from helper.VAE import build_vae, count_records, split_train_val, make_train_dataset, make_val_dataset, make_test_dataset, _select
+from xssdense.vae import build_vae, count_records, split_train_val, make_train_dataset, make_val_dataset, make_test_dataset, _select
 
 # =========================================================
 # Constants
@@ -72,7 +72,7 @@ def parse_arguments():
     parser.add_argument("--batchsize", type=int, default=64, help="Batch size (default: 64)")
     parser.add_argument("--patience", type=int, default=5, help="Stop after this many epochs without improvement in validation MSE (default: 5)")
     parser.add_argument("--min_improvement", type=float, default=0.005, help="Relative drop in the ValMSE that counts as improvement (default: 0.005)")
-    parser.add_argument("--save_every_epoch", type=bool, default=False, action="store_true", help="Saves weights from every epoch (default: False)")
+    parser.add_argument("--save_every_epoch", action="store_true", help="Saves weights from every epoch (default: False)")
     args = parser.parse_args()
 
     explicit = [args.train_datapath, args.test_datapath, args.meta_datapath]
@@ -111,15 +111,10 @@ def compute_loss(model, x, beta):
     mean, logvar = model.encode(x)
     z = model.reparameterize(mean, logvar)
     x_pred = model.decode(z)
-    # reconstruction = tf.reduce_sum(tf.square(x - x_pred), axis=[1, 2, 3, 4])
-    # kl_raw = kl_divergence(mean, tf.exp(0.5 * logvar))
-    # total = reconstruction + tf.cast(beta, tf.float32) * kl_raw
-    # return tf.reduce_mean(total), tf.reduce_mean(reconstruction), kl_raw
-    sse = tf.reduce_sum(tf.square(x - x_pred), axis=[1, 2, 3, 4])
-    l1 = tf.reduce_sum(tf.abs(x - x_pred), axis=[1, 2, 3, 4])
+    reconstruction = tf.reduce_sum(tf.square(x - x_pred), axis=[1, 2, 3, 4])
     kl_raw = kl_divergence(mean, tf.exp(0.5 * logvar))
-    total = l1 + tf.cast(beta, tf.float32) * kl_raw
-    return tf.reduce_mean(total), tf.reduce_mean(sse), kl_raw
+    total = reconstruction + tf.cast(beta, tf.float32) * kl_raw
+    return tf.reduce_mean(total), tf.reduce_mean(reconstruction), kl_raw
 
 
 # =========================================================
@@ -261,7 +256,7 @@ def make_log_dir(args):
     return str(log_dir)
 
 
-if __name__ == "__main__":
+def main():
     configure_gpu(mixed_precision=True)
     set_seeds(SEED)
 
@@ -284,3 +279,7 @@ if __name__ == "__main__":
     print(f"Final test: Loss={test_loss:.5f}, MSE={test_mse:.5f}, KL={test_kl:.5f}")
     save_models(vae, log_dir)
     save_latent_stats(vae, args.train_datapath, is_train, args.batchsize, log_dir)
+
+
+if __name__ == "__main__":
+    main()

@@ -7,8 +7,9 @@ import numpy as np
 
 AUTOTUNE = tf.data.AUTOTUNE
 GRID_SIZE = 52
-LATENT_GRID = GRID_SIZE // 4  # spatial size after the encoder's two 2x poolings
+LATENT_GRID = GRID_SIZE // 4
 INPUT_SHAPE = (GRID_SIZE, GRID_SIZE, GRID_SIZE, 1)
+BOTTLENECK_CHANNELS = 64
 
 
 @tf.keras.utils.register_keras_serializable()
@@ -45,7 +46,7 @@ def build_encoder(z_dim):
     x = conv_block(x, 32, 2)
     x = tf.keras.layers.MaxPool3D(2)(x)
     x = conv_block(x, 64, 2)
-    x = tf.keras.layers.Conv3D(16, 1, kernel_initializer="he_normal")(x)  # 64 -> 16 channels
+    x = tf.keras.layers.Conv3D(BOTTLENECK_CHANNELS, 1, kernel_initializer="he_normal")(x)
     x = tf.keras.layers.LeakyReLU()(x)
     x = tf.keras.layers.Flatten()(x)
     z = tf.keras.layers.Dense(z_dim * 2, activation=None, dtype="float32")(x)  # mean and logvar
@@ -54,9 +55,9 @@ def build_encoder(z_dim):
 
 def build_decoder(z_dim, target_sum):
     latent_inputs = tf.keras.Input(shape=(z_dim,))
-    x = tf.keras.layers.Dense(LATENT_GRID**3 * 16, activation="relu", kernel_initializer="he_normal")(latent_inputs)
-    x = tf.keras.layers.Reshape((LATENT_GRID, LATENT_GRID, LATENT_GRID, 16))(x)
-    x = tf.keras.layers.Conv3D(64, 1, activation="relu", kernel_initializer="he_normal")(x)  # 16 -> 64 channels
+    x = tf.keras.layers.Dense(LATENT_GRID**3 * BOTTLENECK_CHANNELS, activation="relu", kernel_initializer="he_normal")(latent_inputs)
+    x = tf.keras.layers.Reshape((LATENT_GRID, LATENT_GRID, LATENT_GRID, BOTTLENECK_CHANNELS))(x)
+    x = tf.keras.layers.Conv3D(64, 1, activation="relu", kernel_initializer="he_normal")(x)
     x = conv_block(x, 64, 2)
     x = tf.keras.layers.UpSampling3D(2)(x)
     x = conv_block(x, 32, 2)

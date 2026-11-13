@@ -1,14 +1,15 @@
 """
 Save voxel densities as TFRecords with global min-max normalization to [0, 1].
 Usage:
-    python 2_generate_tfrecord.py \
-        --rho_dir "data/1crn_41bb_1d61dv_5co.h5" \
+    xssdense-gen-tfrecord \
+        --h5 "data/1crn_41bb_1d61dv_5co.h5" \
         --output_dir "data/1crn_41bb_1d61dv_5co.tfrecord"
 """
 
 import argparse
 import json
 import os
+import re
 from concurrent.futures import ProcessPoolExecutor
 
 import h5py
@@ -58,11 +59,13 @@ def write_tfrecord(filename, examples):
 # Data steps
 # =========================================================
 def load_rho(path):
+    """Densities, voxel size and bounding box from the voxelisation h5 (bbmax None in old files)."""
     with h5py.File(path, "r") as f:
         rho = f["rho"][()]
         dv = float(f["dv"][()])
-    print(f"Loaded {rho.shape[0]} frames of {rho.shape[1:]}, voxel size {dv:.4f} Å")
-    return rho, dv
+        bbmax = float(f["bbmax"][()]) if "bbmax" in f else None
+    print(f"Loaded {rho.shape[0]} frames of {rho.shape[1:]}, voxel size {dv:.4f} Å, bounding box {bbmax} Å")
+    return rho, dv, bbmax
 
 
 def electron_count(rho, dv):
@@ -97,12 +100,18 @@ def split_blocks(n_frames, block, test_every):
     return is_train, is_test
 
 
-def save_test_rho(path, rho_test, test_indices, dv):
-    """rho test frames with their trajectory indices, for synthetic data and comparisons."""
-    with h5py.File(path, "w") as f:
-        f["rho"] = rho_test
-        f["index"] = test_indices
-        f["dv"] = dv
+def mask_to_ranges(mask):
+    """Boolean mask -> half-open [start, stop) runs of True, e.g. [[0, 100], [1000, 1100]]."""
+    padded = np.concatenate(([0], mask.astype(np.int8), [0]))
+    edges = np.flatnonzero(np.diff(padded))
+    return [[int(a), int(b)] for a, b in zip(edges[::2], edges[1::2])]
+
+
+def compact_json(obj):
+    """json.dumps with indent=2, but lists of plain numbers kept on one line.
+    Only lists spanning several lines are collapsed; strings never contain raw newlines, so they are untouched."""
+    text = json.dumps(obj, indent=2)
+    return re.sub(r"\[(\s*\n[-+\d.eE,\s]*?)\]",lambda m: "[" + ", ".join(s.strip() for s in m.group(1).split(",")) + "]", text)
 
 
 # =========================================================
@@ -129,13 +138,12 @@ def main():
     os.makedirs(tf_out, exist_ok=True)
     os.makedirs(meta_out, exist_ok=True)
 
-    rho, dv = load_rho(args.h5)
+    rho, dv, bbmax = load_rho(args.h5)
     grid_size = rho.shape[1]
     n_electrons, n_electrons_std = electron_count(rho, dv)
 
     is_train, is_test = split_blocks(len(rho), args.block, args.test_every)
     train_indices, test_indices = np.flatnonzero(is_train), np.flatnonzero(is_test)
-    save_test_rho(os.path.join(tf_out, "test_rho.h5"), rho[is_test].astype(np.float32), test_indices, dv)
 
     rho_norm, x_min, x_max = normalize(rho)
     del rho  # free memory
@@ -148,13 +156,19 @@ def main():
     meta = {
         "grid_size": grid_size,
         "voxel_shape": [grid_size] * 3,
-        "voxel_size": dv,
-        "voxel_count": len(rho_norm),
+        "dv": dv,  # copied from the voxelisation h5
+        "bbmax": bbmax,  # copied from the voxelisation h5
+        "n_frames": len(rho_norm),
         "train_samples": len(train_indices),
         "test_samples": len(test_indices),
-        "split": {"type": "blocks", "block": args.block, "test_every": args.test_every},
-        "train_indices": [int(i) for i in train_indices],
-        "test_indices": [int(i) for i in test_indices],
+        # frame ranges into the source h5, half-open [start, stop); expand with range(start, stop)
+        "split": {
+            "type": "blocks",
+            "block": args.block,
+            "test_every": args.test_every,
+            "train_ranges": mask_to_ranges(is_train),
+            "test_ranges": mask_to_ranges(is_test),
+        },
         "normalized": True,
         "normalization": {"type": "minmax", "min": x_min, "max": x_max},
         "electron_conservation": {
@@ -165,10 +179,10 @@ def main():
         "source_dir": args.h5,
     }
     with open(os.path.join(meta_out, "meta.json"), "w") as f:
-        json.dump(meta, f, indent=2)
+        f.write(compact_json(meta) + "\n")
 
     print("TFRecord generation complete")
-    for name in ("train.tfrecords", "test.tfrecords", "test_rho.h5"):
+    for name in ("train.tfrecords", "test.tfrecords"):
         print(f"  {os.path.join(tf_out, name)}")
     print(f"  {os.path.join(meta_out, 'meta.json')}")
 

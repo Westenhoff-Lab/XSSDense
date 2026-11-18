@@ -12,7 +12,7 @@ Usage:
         --dark_curve lov2/ground_abs.dat \
         --dI_curve lov2/deltaI_unfolded.dat \
         --output_folder lov2/run_20261110_2037/results/unfolded \
-        --rho_bulk 0.334 --target_yield 0.15 --qmax 0.6 --device auto
+        --rho_bulk 0.334 --target_yield 0.15 --qmax 0.6
 """
 
 import os
@@ -36,11 +36,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from xssdense.density_manipulation import create_ccp4_map_
-from xssdense.scattering import scattering_curve_gpu, set_backend
+from xssdense import scattering
+from xssdense.scattering import scattering_curve_gpu
 from xssdense.vae import load_vae
 
 N_CORES = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()  # macOS has no sched_getaffinity
-N_THREADS = max(1, N_CORES // 4)  # parallel candidates on the CPU (1 on the GPU); each FFT gets N_CORES // N_THREADS threads
+N_THREADS = max(1, N_CORES // 4)  # parallel candidates; each FFT gets N_CORES // N_THREADS threads
 DECODE_BATCH = 64
 
 
@@ -212,19 +213,6 @@ def run_ga(score_fn, pool, lower, upper, std, args):
     return Z[order], scores[order], yields[order], r2s[order], np.array(history)
 
 
-def pick_distinct(Z, scores, std, k, min_dist, max_drop):
-    """Up to k candidates (Z sorted best first), at least `min_dist` latent std apart and within `max_drop` of the best score."""
-    keep = []
-    for i in range(len(Z)):
-        if scores[i] < scores[0] - max_drop:
-            break
-        if all(np.sqrt(np.mean(((Z[i] - Z[j]) / std) ** 2)) > min_dist for j in keep):
-            keep.append(i)
-        if len(keep) == k:
-            break
-    return keep
-
-
 # =========================================================
 # Output
 # =========================================================
@@ -283,11 +271,8 @@ def parse_arguments():
     parser.add_argument("--mutation_rate", type=float, default=0.5, help="Fraction of latent dimensions mutated per child (default: 0.5)")
     parser.add_argument("--step_min", type=float, default=0.03, help="Smallest mutation step, in latent std (default: 0.03)")
     parser.add_argument("--step_max", type=float, default=1.0, help="Largest mutation step, in latent std (default: 1.0)")
-    parser.add_argument("--top_k", type=int, default=5, help="Number of distinct candidates to save (default: 5)")
-    parser.add_argument("--min_dist", type=float, default=0.1, help="Minimum latent distance between saved candidates, in latent std (default: 0.1)")
-    parser.add_argument("--max_drop", type=float, default=0.05, help="Save only candidates within this much of the best score (default: 0.05)")
+    parser.add_argument("--top_k", type=int, default=5, help="Number of best-scoring candidates to save (default: 5)")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--device", choices=["auto", "cpu", "gpu"], default="auto", help="Scattering on the CPU or the GPU (CuPy); auto = GPU if available (default: auto)")
     args = parser.parse_args()
     for key, value in vars(args).items():
         print(f"{key}: {value}")
@@ -295,14 +280,10 @@ def parse_arguments():
 
 
 def main():
-    global N_THREADS
     args = parse_arguments()
-    device = set_backend(args.device)
-    if device == "gpu":
-        N_THREADS = 1
-    set_backend(device, max(1, N_CORES // N_THREADS))
+    scattering.FFT_WORKERS = max(1, N_CORES // N_THREADS)
     threshold = args.rho_bulk if args.threshold is None else args.threshold
-    print(f"Scattering on {device}, {N_THREADS} candidate thread(s); envelope: density > {threshold} e/Å³")
+    print(f"{N_THREADS} candidate thread(s), {scattering.FFT_WORKERS} FFT thread(s) each; envelope: density > {threshold} e/Å³")
     os.makedirs(args.output_folder, exist_ok=True)
 
     with open(args.meta) as f:
@@ -349,9 +330,8 @@ def main():
     pool = diverse_pool(train_latents, std, args.pool_size, np.random.default_rng(args.seed))
     Z, scores, yields, r2s, history = run_ga(score_fn, pool, lower, upper, std, args)
 
-    # 3. Best distinct candidates
-    keep = pick_distinct(Z, scores, std, args.top_k, args.min_dist, args.max_drop)
-    Z_out = Z[keep]
+    # 3. Best candidates (Z is sorted best first)
+    Z_out = Z[: args.top_k]
 
     densities = decode(vae, Z_out, xmin, xmax)
     candidates = save_results(args.output_folder, Z_out, densities, z_dark, std, dv, score_args)

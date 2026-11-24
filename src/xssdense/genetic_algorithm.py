@@ -1,19 +1,4 @@
-"""
-Genetic-algorithm reconstruction of a light-state density from a deltaI(q) curve.
-The search starts from, and draws newcomers from, a pool of training latents chosen to cover the
-occupied latent space evenly so neither compact nor extended conformations
-are favored. Each mutation draws its own step size, so local and large moves are always both tried.
-
-Usage:
-    python 4_genetic_algorithm.py \
-        --model_path lov2/run_20261110_2037/lov2_61bb_2d4dv_5co.vae \
-        --meta lov2/run_20261110_2037/lov2_61bb_2d4dv_5co.tfrecord/meta/meta.json \
-        --h5 lov2/run_20261110_2037/lov2_61bb_2d4dv_5co.h5 \
-        --dark_curve lov2/ground_abs.dat \
-        --dI_curve lov2/deltaI_unfolded.dat \
-        --output_folder lov2/run_20261110_2037/results/unfolded \
-        --rho_bulk 0.334 --target_yield 0.15 --qmax 0.6
-"""
+"""Genetic-algorithm reconstruction of a light-state density from ΔI(q)."""
 
 import os
 
@@ -60,7 +45,7 @@ def select_q(q, I, qmin, qmax):
 
 
 def fit_scale(I_model, I_data):
-    """Least-squares factor minimizing sum (I_data - factor * I_model)^2."""
+    """Least-squares scale factor."""
     return np.sum(I_data * I_model) / np.sum(I_model**2)
 
 
@@ -71,13 +56,13 @@ def r_squared(I_model, I_data):
 
 
 def model_curve(density, dv, q_data, rho_bulk, drho, shell, padding, threshold):
-    """Scattering curve of `density`, interpolated onto the data's q-values (NumPy)."""
+    """Scattering curve interpolated onto the data's q-values."""
     q, I = scattering_curve_gpu(density, dv, rho_bulk, drho, shell, padding, qmax=None, threshold=threshold)
     return np.interp(q_data, q, I)
 
 
 def fit_dark_state(dark, dv, q_data, I_data, rho_bulk, padding, threshold):
-    """Scan shell thickness (1-5 Å) and contrast (0-13% of bulk), as in the paper; fit the absolute scale for each. Keep the best by r²."""
+    """Fit shell thickness, contrast and scale to the dark-state curve."""
     shells, drho_percents = ((0.0,), (0,)) if rho_bulk == 0 else ((1.0, 2.0, 3.0, 4.0, 5.0), range(0, 14))
     best = None
     for shell in shells:
@@ -95,7 +80,7 @@ def fit_dark_state(dark, dv, q_data, I_data, rho_bulk, padding, threshold):
 # Candidates
 # =========================================================
 def decode(vae, Z, xmin, xmax):
-    """Latent vectors (n, latent_dim) -> densities in physical units, decoded DECODE_BATCH at a time."""
+    """Latent vectors -> densities in physical units."""
     Z = np.asarray(Z, dtype=np.float32)
     x = np.concatenate([vae.decode(Z[i : i + DECODE_BATCH]).numpy() for i in range(0, len(Z), DECODE_BATCH)])[..., 0]
     return np.clip(x * (xmax - xmin) + xmin, 0, None)
@@ -114,13 +99,13 @@ def radius_of_gyration(density, dv):
 
 
 def candidate_dI(density, dark_fit, q_data, dv, rho_bulk, padding):
-    """Model ΔI of one density for a yield of 1; the light state uses the dark state's shell thickness and contrast."""
+    """Model ΔI of one density for a yield of 1."""
     I_light = model_curve(density, dv, q_data, rho_bulk, dark_fit["drho"], dark_fit["shell"], padding, dark_fit["threshold"])
     return dark_fit["scale"] * (I_light - dark_fit["I_dark"])
 
 
 def score_candidate(density, dark_fit, q_data, dI_data, dv, rho_bulk, padding, target_yield, yield_weight):
-    """q-weighted R² of the ΔI fit minus the yield penalty. Returns (score, yield, r2)."""
+    """q-weighted R^2 of the ΔI fit minus the yield penalty."""
     w = q_data
     dI_model = candidate_dI(density, dark_fit, q_data, dv, rho_bulk, padding)
     if not np.any(dI_model):
@@ -131,7 +116,6 @@ def score_candidate(density, dark_fit, q_data, dI_data, dv, rho_bulk, padding, t
 
 
 def score_population(vae, Z, xmin, xmax, score_args):
-    """Decode and score all latent vectors in Z, in parallel threads. Returns arrays (scores, yields, r2s)."""
     densities = decode(vae, Z, xmin, xmax)
     if N_THREADS == 1:
         results = [score_candidate(d, **score_args) for d in densities]
@@ -146,8 +130,7 @@ def score_population(vae, Z, xmin, xmax, score_args):
 # Search
 # =========================================================
 def diverse_pool(train_latents, std, n, rng):
-    """n training latents that cover the occupied latent space evenly (farthest-point sampling, distances in latent std).
-    Unlike random draws, this doesn't favor regions where many training frames lie."""
+    """Training latents that cover the latent space evenly (farthest-point sampling)."""
     X = train_latents / std
     idx = [int(rng.integers(len(X)))]
     dist = np.linalg.norm(X - X[idx[0]], axis=1)
@@ -159,30 +142,27 @@ def diverse_pool(train_latents, std, n, rng):
 
 
 def select_parents(Z, scores, rng, k=3):
-    """Tournament selection: for each slot, pick k random members and keep the best."""
+    """Tournament selection."""
     picks = rng.integers(0, len(Z), size=(len(Z), k))
     return Z[picks[np.arange(len(Z)), np.argmax(scores[picks], axis=1)]]
 
 
 def crossover(parents, rng):
-    """Blend each parent with a random partner, per dimension."""
+    """Blend each parent with a random partner."""
     partners = parents[rng.permutation(len(parents))]
     a = rng.uniform(size=parents.shape)
     return a * parents + (1 - a) * partners
 
 
 def mutate(Z, std, lower, upper, rate, step_min, step_max, rng):
-    """Gaussian mutation of a fraction `rate` of the entries, with a step size drawn per child,
-    log-uniformly between step_min and step_max (latent std): small local moves and large jumps alike."""
+    """Gaussian mutation with a log-uniform step size per child."""
     steps = np.exp(rng.uniform(np.log(step_min), np.log(step_max), (len(Z), 1)))
     mask = rng.random(Z.shape) < rate
     return np.clip(Z + mask * rng.normal(0.0, 1.0, Z.shape) * steps * std, lower, upper)
 
 
 def run_ga(score_fn, pool, lower, upper, std, args):
-    """Maximize score_fn over latent space. Starts from, and draws newcomers from, the diverse pool;
-    stops after `patience` generations without improvement. Returns the final population sorted by score
-    (best first), its scores, yields and r2s, and the best score per generation."""
+    """Maximize score_fn over the latent space."""
     rng = np.random.default_rng(args.seed)
     n_elite = max(1, int(args.elite_fraction * args.pop_size))
     n_new = int(args.newcomer_fraction * args.pop_size)
@@ -217,7 +197,7 @@ def run_ga(score_fn, pool, lower, upper, std, args):
 # Output
 # =========================================================
 def save_results(out, Z, densities, z_dark, std, dv, score_args):
-    """Per candidate: latent, density, CCP4 map, ΔI curve. Plus one plot with all curves. Returns per-candidate info."""
+    """Save latent, density, CCP4 map and ΔI curve of each candidate."""
     q_data, dI_data = score_args["q_data"], score_args["dI_data"]
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.plot(q_data, dI_data, "k.", label="data")
@@ -254,10 +234,10 @@ def parse_arguments():
     parser.add_argument("--dI_curve", required=True, help="Measured ΔI, CSV (q, ΔI)")
     parser.add_argument("--output_folder", required=True)
     # Physics and data
-    parser.add_argument("--rho_bulk", type=float, default=0.334, help="Bulk solvent density in e/Å³; 0 for vacuum (default: 0.334)")
-    parser.add_argument("--threshold", type=float, default=None, help="Density above which a voxel displaces bulk solvent, e/Å³ (default: rho_bulk)")
+    parser.add_argument("--rho_bulk", type=float, default=0.334, help="Bulk solvent density in e/Å^3; 0 for vacuum (default: 0.334)")
+    parser.add_argument("--threshold", type=float, default=None, help="Density above which a voxel displaces bulk solvent, e/Å^3 (default: rho_bulk)")
     parser.add_argument("--target_yield", type=float, default=0.5, help="Expected photoactivation yield (default: 0.5)")
-    parser.add_argument("--yield_weight", type=float, default=2.0, help="Weight of the penalty on (yield - target)² (default: 2)")
+    parser.add_argument("--yield_weight", type=float, default=2.0, help="Weight of the penalty on (yield - target)^2 (default: 2)")
     parser.add_argument("--qmin", type=float, default=0.0, help="Smallest q used in the fit (default: 0)")
     parser.add_argument("--qmax", type=float, default=0.6, help="Largest q used in the fit (default: 0.6)")
     parser.add_argument("--padding", type=int, default=3, help="FFT padding factor; for synthetic data it must match the data generation (default: 3)")
@@ -283,7 +263,7 @@ def main():
     args = parse_arguments()
     scattering.FFT_WORKERS = max(1, N_CORES // N_THREADS)
     threshold = args.rho_bulk if args.threshold is None else args.threshold
-    print(f"{N_THREADS} candidate thread(s), {scattering.FFT_WORKERS} FFT thread(s) each; envelope: density > {threshold} e/Å³")
+    print(f"{N_THREADS} candidate thread(s), {scattering.FFT_WORKERS} FFT thread(s) each; envelope: density > {threshold} e/Å^3")
     os.makedirs(args.output_folder, exist_ok=True)
 
     with open(args.meta) as f:

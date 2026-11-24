@@ -1,6 +1,4 @@
-"""
-Shared model definitions and data loading (train / validation / test) for the beta-VAE
-"""
+"""beta-VAE model and data loading."""
 
 import tensorflow as tf
 import numpy as np
@@ -14,7 +12,7 @@ BOTTLENECK_CHANNELS = 64
 
 @tf.keras.utils.register_keras_serializable()
 class ElectronConservation(tf.keras.layers.Layer):
-    """Rescales each density grid so that its voxel sum equals `target_sum`."""
+    """Rescales each density so its voxel sum equals target_sum."""
 
     def __init__(self, target_sum, eps=1e-7, **kwargs):
         super().__init__(**kwargs)
@@ -32,7 +30,6 @@ class ElectronConservation(tf.keras.layers.Layer):
 
 
 def conv_block(x, filters, n):
-    """n convolutions at the current resolution."""
     for _ in range(n):
         x = tf.keras.layers.Conv3D(filters, 3, padding="same", kernel_initializer="he_normal")(x)
         x = tf.keras.layers.LeakyReLU()(x)
@@ -97,14 +94,13 @@ class VAE(tf.keras.Model):
 
 
 def build_vae(z_dim, target_sum):
-    """New, untrained VAE (for training)."""
     vae = VAE(z_dim, build_encoder(z_dim), build_decoder(z_dim, target_sum))
     vae(tf.zeros((1, *INPUT_SHAPE)))  # create all variables
     return vae
 
 
 def load_vae(model_dir):
-    """Trained VAE from the encoder_model.keras / decoder_model.keras in `model_dir`."""
+    """Load a trained VAE from model_dir."""
     encoder = tf.keras.models.load_model(f"{model_dir}/encoder_model.keras")
     decoder = tf.keras.models.load_model(f"{model_dir}/decoder_model.keras", custom_objects={"ElectronConservation": ElectronConservation})
     latent_dim = encoder.output_shape[-1] // 2
@@ -112,7 +108,7 @@ def load_vae(model_dir):
 
 
 def reconstruct(vae, x):
-    """Encode to the latent mean and decode again (deterministic)."""
+    """Encode to the latent mean and decode."""
     mean, _ = vae.encode(x)
     return vae.decode(mean)
 
@@ -131,11 +127,7 @@ def count_records(path):
 
 
 def split_train_val(num_samples, block=100, val_every=10):
-    """Masks for the records of train.tfrecords: (is_train, is_val).
-    Every `val_every`-th block of `block` records is validation, the rest is training.
-    This is not necessary for data produced with AFsample2 but
-    it is good for MD where neighbouring frames are correlated.
-    """
+    """Every val_every-th block of records is validation, the rest is training."""
     pos = np.arange(num_samples)
     is_val = (pos // block) % val_every == 0
     is_train = ~is_val
@@ -144,7 +136,6 @@ def split_train_val(num_samples, block=100, val_every=10):
 
 
 def _select(path, mask):
-    """Records of `path` where `mask` is True, parsed."""
     mask = tf.constant(mask)
 
     def keep(i, rec):
@@ -157,15 +148,12 @@ def _select(path, mask):
 
 
 def make_train_dataset(path, is_train, batchsize, seed, shuffle_buffer=5000):
-    """Training data for one epoch: shuffled with `seed`, batched."""
     return _select(path, is_train).shuffle(shuffle_buffer, seed=seed).batch(batchsize, drop_remainder=True).prefetch(AUTOTUNE)
 
 
 def make_val_dataset(path, is_val, batchsize):
-    """Validation data: fixed, unshuffled, cached after the first pass."""
     return _select(path, is_val).batch(batchsize).cache().prefetch(AUTOTUNE)
 
 
 def make_test_dataset(path, batchsize):
-    """Test data (its own file): unshuffled, read once."""
     return tf.data.TFRecordDataset(path).map(parse_tfrecord, num_parallel_calls=AUTOTUNE).batch(batchsize).prefetch(AUTOTUNE)

@@ -4,9 +4,7 @@ import sys
 import argparse
 
 def create_ccp4_map_(density_array, output_map_file, voxel_size):
-    """
-    Create a CCP4 map in real space using the voxel size in Å
-    """
+    """Write a CCP4 map with the given voxel size (Å)."""
     # Get grid shape
     nx, ny, nz = density_array.shape
     #print(f"Grid shape: {nx, ny, nz}")

@@ -1,13 +1,4 @@
-"""
-From PDB ensemble or MD trajectory, computes the electron density on a 3D grid and save it to an HDF5 file
-Usage:
-    xssdense-voxelize \
-        --topology "data/1crn.psf" \
-        --trajectory "data/1crn_eq_aligned.dcd" \
-        --bbmax 41 \
-        --save_path data \
-        --system "1crn"
-"""
+"""Electron densities on a 3D grid from a PDB ensemble or MD trajectory."""
 
 import numpy
 import MDAnalysis
@@ -147,7 +138,7 @@ def interpret_user_input(args, parser):
 
 
 def get_centered_positions(u, selection):
-    """Return element symbols and per-frame centred coordinates, shape (nframes, natoms, 3)."""
+    """Element symbols and centred coordinates per frame."""
     sel = u.select_atoms(selection)
     positions = numpy.array([sel.positions for _ in u.trajectory])
     centered = positions - positions.mean(axis=1, keepdims=True)

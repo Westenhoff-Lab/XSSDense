@@ -1,6 +1,4 @@
-"""Logging redirect for cubersom cpp warnings.
-It sends TensorFlow's C++ log output (fd 2) to a file.
-Must run before `import tensorflow`."""
+"""Send TensorFlow's C++ logs to a file. Must run before importing TensorFlow."""
 
 import os
 import sys

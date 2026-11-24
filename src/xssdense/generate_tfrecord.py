@@ -1,10 +1,4 @@
-"""
-Save voxel densities as TFRecords with global min-max normalization to [0, 1].
-Usage:
-    xssdense-gen-tfrecord \
-        --h5 "data/1crn_41bb_1d61dv_5co.h5" \
-        --output_dir "data/1crn_41bb_1d61dv_5co.tfrecord"
-"""
+"""Save voxel densities as normalized TFRecords."""
 
 import argparse
 import json
@@ -43,7 +37,6 @@ def frame_jobs(voxels):
 
 
 def serialize_all(voxels, num_proc):
-    """Serialized examples of all frames, in frame order."""
     with ProcessPoolExecutor(max_workers=num_proc) as executor:
         results = list(tqdm(executor.map(serialize_frame, frame_jobs(voxels), chunksize=16), total=len(voxels), desc="Serializing"))
     return [ex for _, ex in results]
@@ -59,7 +52,6 @@ def write_tfrecord(filename, examples):
 # Data steps
 # =========================================================
 def load_rho(path):
-    """Densities, voxel size and bounding box from the voxelisation h5 (bbmax None in old files)."""
     with h5py.File(path, "r") as f:
         rho = f["rho"][()]
         dv = float(f["dv"][()])
@@ -69,8 +61,7 @@ def load_rho(path):
 
 
 def electron_count(rho, dv):
-    """Mean and std of the electron count per frame.
-    Warn if it varies by more than 1%."""
+    """Mean and std of the electron count per frame."""
     n = rho.sum(axis=tuple(range(1, rho.ndim)), dtype=np.float64) * dv**3
     mean, std = n.mean(), n.std()
     print(f"Electrons per frame: mean {mean:.6g}, rel. std {std / mean:.2%}")
@@ -80,7 +71,7 @@ def electron_count(rho, dv):
 
 
 def normalize(rho):
-    """Global min-max normalization to [0, 1]. Returns (rho_norm, min, max)."""
+    """Global min-max normalization to [0, 1]."""
     x_min, x_max = float(rho.min()), float(rho.max())
     if x_max <= x_min:
         raise RuntimeError(f"Invalid normalization range: min={x_min}, max={x_max}")
@@ -90,9 +81,7 @@ def normalize(rho):
 
 
 def split_blocks(n_frames, block, test_every):
-    """Every `test_every`-th block of `block` consecutive frames is test, the rest is training.
-    Not needed for independent structures (e.g. AFsample2), but important for MD,
-    where neighbouring frames are correlated."""
+    """Every test_every-th block of frames is test, the rest is training."""
     pos = np.arange(n_frames)
     is_test = (pos // block) % test_every == 0
     is_train = ~is_test
@@ -101,15 +90,14 @@ def split_blocks(n_frames, block, test_every):
 
 
 def mask_to_ranges(mask):
-    """Boolean mask -> half-open [start, stop) runs of True, e.g. [[0, 100], [1000, 1100]]."""
+    """Boolean mask -> half-open [start, stop) ranges."""
     padded = np.concatenate(([0], mask.astype(np.int8), [0]))
     edges = np.flatnonzero(np.diff(padded))
     return [[int(a), int(b)] for a, b in zip(edges[::2], edges[1::2])]
 
 
 def compact_json(obj):
-    """json.dumps with indent=2, but lists of plain numbers kept on one line.
-    Only lists spanning several lines are collapsed; strings never contain raw newlines, so they are untouched."""
+    """JSON with number lists kept on one line."""
     text = json.dumps(obj, indent=2)
     return re.sub(r"\[(\s*\n[-+\d.eE,\s]*?)\]",lambda m: "[" + ", ".join(s.strip() for s in m.group(1).split(",")) + "]", text)
 

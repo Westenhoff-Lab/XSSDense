@@ -1,14 +1,4 @@
-"""
-Train a beta-VAE on voxelized electron densities stored as TFRecords
-Usage:
-    xssdense-train-vae \
-    --datapath "data/1crn_41bb_1d61dv_5co.tfrecord" \
-    --savepath "data" \
-    --epochs=30 \
-    --mode constant \
-    --beta_input 1e-2 \
-    --batchsize 64
-"""
+"""Train a beta-VAE on voxelized electron densities."""
 
 import os
 from xssdense import redirect_tf_cpp_logs
@@ -33,7 +23,6 @@ WARMUP_FRACTION = 0.1  # fraction of training steps for the beta warm-up ("late"
 # Setup
 # =========================================================
 def configure_gpu(mixed_precision=True):
-    """Enable memory growth on all GPUs and optionally the mixed_float16 policy."""
     gpus = tf.config.list_physical_devices("GPU")
     if not gpus:
         print("WARNING: No GPU detected by TensorFlow. Running on CPU.")
@@ -100,14 +89,14 @@ def load_meta(meta_path):
 # Losses
 # =========================================================
 def kl_divergence(mean, std, eps=1e-8):
-    """KL(q(z|x) || N(0, I)), summed over latent dims, averaged over the batch."""
+    """KL(q(z|x) || N(0, I)), averaged over the batch."""
     std = tf.maximum(std, eps)
     kl = 0.5 * tf.reduce_sum(tf.square(mean) + tf.square(std) - tf.math.log(tf.square(std)) - 1, axis=1)
     return tf.reduce_mean(kl)
 
 
 def compute_loss(model, x, beta):
-    """Returns (total loss, reconstruction SSE, raw unweighted KL), all batch means."""
+    """Returns (total loss, reconstruction SSE, KL)."""
     mean, logvar = model.encode(x)
     z = model.reparameterize(mean, logvar)
     x_pred = model.decode(z)
@@ -142,7 +131,7 @@ def make_optimizer(learning_rate, total_steps, warmup_fraction=0.05):
 
 
 def make_train_step(model, optimizer, beta_var):
-    """Compiled train step. Reads beta from `beta_var`, so changing beta doesn't retrace."""
+    """Compiled train step; beta is read from beta_var."""
 
     @tf.function
     def train_step(x):
@@ -158,7 +147,6 @@ def make_train_step(model, optimizer, beta_var):
 
 
 def evaluate(model, ds, beta):
-    """Average (loss, mse, kl) over all batches of `ds`."""
     loss = mse = kl = 0.0
     steps = 0
     for x in ds:
@@ -171,7 +159,6 @@ def evaluate(model, ds, beta):
 
 
 def train(vae, is_train, val_ds, steps_per_epoch, args, log_dir):
-    """Runs the epoch loop. Returns the beta variable (holding the final beta)."""
     total_steps = steps_per_epoch * args.epochs
     beta_var = tf.Variable(0.0, dtype=tf.float32, trainable=False)
     optimizer = make_optimizer(args.learning_rate, total_steps)
@@ -239,7 +226,7 @@ def save_models(vae, log_dir):
 
 
 def save_latent_stats(vae, train_path, is_train, batchsize, log_dir):
-    """Latent means of the training frames and their mean/std/min/max per dimension (read by the GA)."""
+    """Save training latents and their mean/std/min/max per dimension."""
     ds = _select(train_path, is_train).batch(batchsize)
     means = numpy.concatenate([vae.encode(x)[0].numpy() for x in ds])
     numpy.save(os.path.join(log_dir, "latents_train.npy"), means)
@@ -248,7 +235,7 @@ def save_latent_stats(vae, train_path, is_train, batchsize, log_dir):
 
 
 def make_log_dir(args):
-    """<savepath>/X.vae, where X is the --datapath directory name or the training file name."""
+    """Output directory <savepath>/<datapath name>.vae."""
     src = Path(args.datapath) if args.datapath else Path(args.train_datapath)
     name = src.resolve().with_suffix(".vae").name
     log_dir = Path(args.savepath) / name

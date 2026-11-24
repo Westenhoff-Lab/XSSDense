@@ -222,7 +222,7 @@ xssdense-ga
 
 ## Tutorial
 
-The tutorial reproduces the LOV2 unfolding case from the accompanying manuscript. The example dataset is available on Zenodo (https://doi.org/10.5281/zenodo.21915224) and should be extracted to `example/`:
+The tutorial reproduces the LOV2 unfolding case from the accompanying manuscript. The example dataset is available on Zenodo (https://zenodo.org/records/24500783) and should be extracted to `example/`:
 
 ```
 example/

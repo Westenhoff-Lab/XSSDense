@@ -348,8 +348,6 @@ example_output/
 
 The `.vae` directory is named after `--datapath` and `log.txt` has the training and validation losses per epoch. `latents_train.npy` holds the encoded training set, and `latent_stats.txt` the mean, standard deviation, minimum and maximum of each latent dimension. Both are computed automatically after training and are used by the genetic algorithm.
 
-Expected runtime: approximately 2 hours, depending on dataset size and hardware.
-
 ### Step 4: Reconstruct Electron Density
 
 Search the latent space for the density whose difference scattering matches the measured signal.

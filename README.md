@@ -222,7 +222,7 @@ xssdense-ga
 
 ## Tutorial
 
-The tutorial reproduces the LOV2 unfolding case from the accompanying manuscript. The example dataset is available on Zenodo (https://zenodo.org/records/24500783) and should be extracted to `example/`:
+The tutorial reproduces the LOV2 unfolding case from the accompanying manuscript. The example dataset is available on Zenodo (https://doi.org/10.5281/zenodo.21915223) and should be extracted to `example/`:
 
 ```
 example/
@@ -315,7 +315,7 @@ xssdense-train-vae \
     --savepath example_output \
     --mode late \
     --beta_input 1 \
-    --epochs 60 \
+    --epochs 50 \
     --batchsize 64
 ```
 
@@ -346,7 +346,7 @@ example_output/
     └── log.txt
 ```
 
-The `.vae` directory is named after `--datapath`. `log.txt` has the training and validation losses per epoch. `latents_train.npy` holds the encoded training set, and `latent_stats.txt` the mean, standard deviation, minimum and maximum of each latent dimension. Both are computed automatically after training and are used by the genetic algorithm.
+The `.vae` directory is named after `--datapath` and `log.txt` has the training and validation losses per epoch. `latents_train.npy` holds the encoded training set, and `latent_stats.txt` the mean, standard deviation, minimum and maximum of each latent dimension. Both are computed automatically after training and are used by the genetic algorithm.
 
 Expected runtime: approximately 2 hours, depending on dataset size and hardware.
 
@@ -364,10 +364,12 @@ xssdense-ga \
     --output_folder example_output/results/unfolded \
     --rho_bulk 0.334 \
     --target_yield 0.15 \
-    --qmax 0.6
+    --yield_weight 5 \
+    --qmax 0.6 \
+    --seed 1
 ```
 
-Use `example/LOV2_diff_intermediate.dat` as `--dI_curve` (and a different `--output_folder`) to reconstruct the intermediate state.
+Use `example/LOV2_diff_intermediate.dat` as `--dI_curve` (and a different `--output_folder`) to reconstruct the intermediate state. The manuscript results come from ten independent runs per state with `--seed 1` to `--seed 10`.
 
 | Parameter | Description | Default |
 | --- | --- | --- |

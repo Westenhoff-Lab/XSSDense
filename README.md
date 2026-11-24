@@ -431,7 +431,7 @@ There is one set of `rank<N>_*` files per candidate (`--top_k`). The CCP4 maps c
 
 To apply XSSDense to a new molecular system, prepare an ensemble of aligned PDB structures from an MD trajectory with its topology or there template for generating a structural ensemble with AFsample2 [run_afsample2.sh](run_afsample2.sh). Then follow the four-stage workflow.
 
-*** Important Considerations ***
+**Important Considerations**
 
 - All PDB structures must be aligned to a common reference frame.
 - The grid must be 52 x 52 x 52 voxels unless the VAE architecture in `vae.py` is changed.

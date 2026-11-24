@@ -429,17 +429,9 @@ There is one set of `rank<N>_*` files per candidate (`--top_k`). The CCP4 maps c
 
 ## Using Your Own Data
 
-To apply XSSDense to a new molecular system, follow the four-stage workflow:
+To apply XSSDense to a new molecular system, prepare an ensemble of aligned PDB structures from an MD trajectory with its topology or there template for generating a structural ensemble with AFsample2 [run_afsample2.sh](run_afsample2.sh). Then follow the four-stage workflow.
 
-1. Prepare an ensemble of aligned PDB structures or an MD trajectory with its topology. [run_afsample2.sh](run_afsample2.sh) is a template for generating a structural ensemble with AFsample2.
-2. Generate electron-density maps using `xssdense-voxelize`.
-3. Generate training and testing TFRecords using `xssdense-gen-tfrecord`.
-4. Train a β-VAE using `xssdense-train-vae`.
-5. Supply the experimental ground-state and difference-scattering curves.
-6. Perform reconstruction using `xssdense-ga`.
-7. Analyse the reconstructed CCP4 density maps and scattering fits.
-
-## Important Considerations
+*** Important Considerations ***
 
 - All PDB structures must be aligned to a common reference frame.
 - The grid must be 52 x 52 x 52 voxels unless the VAE architecture in `vae.py` is changed.
